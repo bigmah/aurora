@@ -305,6 +305,10 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
       info.sampledTexCoords.set(tcg.embossSrc);
       info.lightingEnabled = true;
     }
+    // SRTG reads the rasterized (lit) color channel, so the channel must be computed
+    if (tcg.type == GX_TG_SRTG && (tcg.src == GX_TG_COLOR0 || tcg.src == GX_TG_COLOR1)) {
+      info.sampledColorChannels.set(tcg.src == GX_TG_COLOR0 ? 0 : 1);
+    }
   }
 
   info.uniformSize += info.loadsTevReg.count() * sizeof(Vec4<float>);

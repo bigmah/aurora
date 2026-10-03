@@ -384,6 +384,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   auto& state = g_gxState;
   auto& cache = sDrawCache;
 
+  // GX_CULL_ALL culls every polygon; WebGPU has no equivalent, so drop the draw.
+  if (state.cullMode == GX_CULL_ALL && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS) {
+    return;
+  }
+
   DrawImmediateData immediates{.vtxStart = vertRange.offset, .currentPnMtx = state.currentPnMtx};
   for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
     if (state.vtxDesc[i] != GX_INDEX8 && state.vtxDesc[i] != GX_INDEX16) {

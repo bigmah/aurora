@@ -212,6 +212,7 @@ wgpu::PrimitiveState to_primitive_state(GXCullMode gx_cullMode) {
     cullMode = wgpu::CullMode::Back;
     break;
   case GX_CULL_NONE:
+  case GX_CULL_ALL: // polygon draws are skipped in push_gx_draw; lines/points are never culled
     break;
   }
   return {
