@@ -79,7 +79,11 @@ if (AURORA_ENABLE_RMLUI)
 endif ()
 
 if (AURORA_ENABLE_GX)
-    target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
+    if (EMSCRIPTEN)
+        target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX ENABLE_BACKEND_WEBGPU)
+    else ()
+        target_compile_definitions(aurora_core PUBLIC AURORA_ENABLE_GX WEBGPU_DAWN)
+    endif ()
     target_sources(aurora_core PRIVATE
             lib/webgpu/gpu.cpp
             lib/webgpu/gpu_cache.cpp

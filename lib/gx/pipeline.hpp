@@ -11,6 +11,9 @@ struct DrawData {
   gfx::Range idxRange;
   gfx::Range uniformRange;
   DrawImmediateData immediateData;
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+  gfx::Range immediateRange;
+#endif
   uint32_t vtxCount;
   uint32_t indexCount;
   uint32_t instanceCount;

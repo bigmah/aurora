@@ -29,6 +29,9 @@
 #include "../dawn/TracyPlatform.hpp"
 #include <dawn/native/DawnNative.h>
 #endif
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace aurora::gx {
 void clear_copy_texture_cache() noexcept;
@@ -75,6 +78,7 @@ static std::atomic_bool g_vsyncEnabled = true;
 
 namespace {
 
+#ifndef __EMSCRIPTEN__
 AuroraLogLevel wgpu_log_level(wgpu::LoggingType type) {
   switch (type) {
   case wgpu::LoggingType::Verbose:
@@ -93,6 +97,7 @@ AuroraLogLevel wgpu_log_level(wgpu::LoggingType type) {
 void wgpu_log(wgpu::LoggingType type, wgpu::StringView message) {
   Log.report(wgpu_log_level(type), "WebGPU message: {}", message);
 }
+#endif
 
 struct ResampleUniformBlock {
   uint32_t samplerMode = 0;
@@ -755,6 +760,24 @@ static wgpu::BackendType to_wgpu_backend(AuroraBackend backend) {
 
 static void release_surface_locked() noexcept { g_surface = {}; }
 
+// Adapter/device requests. Natively these block in WaitAny; in the browser the
+// callbacks only run once control returns to the event loop, so yield (JSPI)
+// until they fire.
+#ifdef __EMSCRIPTEN__
+#define AURORA_WGPU_REQUEST_MODE wgpu::CallbackMode::AllowSpontaneous
+static wgpu::WaitStatus wait_for(const wgpu::Future&, const bool& completed) {
+  for (int i = 0; i < 10000 && !completed; ++i) {
+    emscripten_sleep(1);
+  }
+  return completed ? wgpu::WaitStatus::Success : wgpu::WaitStatus::TimedOut;
+}
+#else
+#define AURORA_WGPU_REQUEST_MODE wgpu::CallbackMode::WaitAnyOnly
+static wgpu::WaitStatus wait_for(const wgpu::Future& future, const bool&) {
+  return g_instance.WaitAny(future, 5000000000);
+}
+#endif
+
 static bool create_surface() {
   SDL_Window* window = window::get_sdl_window();
   if (window == nullptr) {
@@ -774,6 +797,9 @@ static bool create_surface() {
 bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   if (!g_instance) {
     Log.info("Creating WebGPU instance");
+#ifdef __EMSCRIPTEN__
+    wgpu::InstanceDescriptor instanceDescriptor{};
+#else
     const std::array requiredInstanceFeatures{
         wgpu::InstanceFeatureName::TimedWaitAny,
     };
@@ -781,6 +807,7 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
         .requiredFeatureCount = requiredInstanceFeatures.size(),
         .requiredFeatures = requiredInstanceFeatures.data(),
     };
+#endif
 #ifdef WEBGPU_DAWN
     constexpr std::array instanceToggles{
         "allow_unsafe_apis",
@@ -816,7 +843,11 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   }
   {
     const wgpu::RequestAdapterOptions options{
+#ifdef __EMSCRIPTEN__
+        .featureLevel = wgpu::FeatureLevel::Core,
+#else
         .featureLevel = wgpu::FeatureLevel::Compatibility,
+#endif
         .powerPreference = wgpu::PowerPreference::HighPerformance,
         .backendType = backend,
         .compatibleSurface = g_surface,
@@ -828,7 +859,7 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     wgpu::RequestAdapterStatus requestAdapterStatus = wgpu::RequestAdapterStatus::CallbackCancelled;
     std::string requestAdapterMessage;
     const auto future = g_instance.RequestAdapter(
-        &options, wgpu::CallbackMode::WaitAnyOnly,
+        &options, AURORA_WGPU_REQUEST_MODE,
         [&](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, wgpu::StringView message) {
           requestAdapterCallbackCompleted = true;
           requestAdapterStatus = status;
@@ -839,7 +870,7 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
             Log.warn("Adapter request failed: {}: {}", magic_enum::enum_name(status), message);
           }
         });
-    const auto status = g_instance.WaitAny(future, 5000000000);
+    const auto status = wait_for(future, requestAdapterCallbackCompleted);
     if (status != wgpu::WaitStatus::Success) {
       if (requestAdapterCallbackCompleted) {
         Log.error("Failed to create adapter: wait status {}, request status {}, message: {}",
@@ -883,12 +914,16 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   {
     wgpu::Limits supportedLimits{};
     g_adapter.GetLimits(&supportedLimits);
+#ifndef __EMSCRIPTEN__
     wgpu::CompatibilityModeLimits compatibilityModeLimits{wgpu::CompatibilityModeLimits::Init{
         .maxStorageBuffersInVertexStage = 2,
         .maxStorageBuffersInFragmentStage = 2,
     }};
+#endif
     const wgpu::Limits requiredLimits{
+#ifndef __EMSCRIPTEN__
         .nextInChain = &compatibilityModeLimits,
+#endif
         // Use "best" supported limits
         .maxTextureDimension1D = supportedLimits.maxTextureDimension1D == 0 ? WGPU_LIMIT_U32_UNDEFINED
                                                                             : supportedLimits.maxTextureDimension1D,
@@ -903,7 +938,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
             supportedLimits.minUniformBufferOffsetAlignment < 64 ? 64 : supportedLimits.minUniformBufferOffsetAlignment,
         .minStorageBufferOffsetAlignment =
             supportedLimits.minStorageBufferOffsetAlignment < 16 ? 16 : supportedLimits.minStorageBufferOffsetAlignment,
+#ifndef AURORA_IMMEDIATES_AS_UNIFORM
         .maxImmediateSize = sizeof(gx::DrawImmediateData),
+#endif
     };
     Log.info(
         "Using limits:"
@@ -918,7 +955,12 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
         requiredLimits.maxTextureDimension1D, requiredLimits.maxTextureDimension2D,
         requiredLimits.maxTextureDimension3D, requiredLimits.maxTextureArrayLayers,
         requiredLimits.maxStorageBuffersPerShaderStage, requiredLimits.minUniformBufferOffsetAlignment,
-        requiredLimits.minStorageBufferOffsetAlignment, requiredLimits.maxImmediateSize);
+        requiredLimits.minStorageBufferOffsetAlignment,
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+        0u);
+#else
+        requiredLimits.maxImmediateSize);
+#endif
     std::vector<wgpu::FeatureName> requiredFeatures;
     g_hasCoreFeatures = false;
     g_bcTexturesSupported = false;
@@ -929,6 +971,13 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     g_adapter.GetFeatures(&supportedFeatures);
     for (size_t i = 0; i < supportedFeatures.featureCount; ++i) {
       const auto feature = supportedFeatures.features[i];
+#ifdef __EMSCRIPTEN__
+      // emdawnwebgpu doesn't pass TextureComponentSwizzleDescriptor through to the
+      // browser; convert intensity formats on the CPU instead.
+      if (feature == wgpu::FeatureName::TextureComponentSwizzle) {
+        continue;
+      }
+#endif
       if (feature == wgpu::FeatureName::CoreFeaturesAndLimits || feature == wgpu::FeatureName::TextureCompressionBC ||
           feature == wgpu::FeatureName::TextureCompressionASTC ||
           feature == wgpu::FeatureName::TextureComponentSwizzle || feature == wgpu::FeatureName::DualSourceBlending) {
@@ -1025,16 +1074,18 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
             Log.warn("Device lost: {}", message);
           }
         });
+    bool requestDeviceCallbackCompleted = false;
     const auto future =
-        g_adapter.RequestDevice(&deviceDescriptor, wgpu::CallbackMode::WaitAnyOnly,
-                                [](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+        g_adapter.RequestDevice(&deviceDescriptor, AURORA_WGPU_REQUEST_MODE,
+                                [&](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+                                  requestDeviceCallbackCompleted = true;
                                   if (status == wgpu::RequestDeviceStatus::Success) {
                                     g_device = std::move(device);
                                   } else {
                                     Log.warn("Device request failed: {}", message);
                                   }
                                 });
-    const auto status = g_instance.WaitAny(future, 5000000000);
+    const auto status = wait_for(future, requestDeviceCallbackCompleted);
     if (status != wgpu::WaitStatus::Success) {
       Log.error("Failed to create device: {}", magic_enum::enum_name(status));
       return false;
@@ -1042,7 +1093,9 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     if (!g_device) {
       return false;
     }
+#ifndef __EMSCRIPTEN__
     g_device.SetLoggingCallback(wgpu_log);
+#endif
   }
   g_queue = g_device.GetQueue();
 

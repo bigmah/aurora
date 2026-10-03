@@ -6,6 +6,8 @@ extern "C" {
 #endif
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <dolphin/types.h>
 
 /**
@@ -14,6 +16,23 @@ extern "C" {
  * Returns true on success, false on failure.
  */
 bool aurora_dvd_open(const char* disc_path);
+
+/**
+ * A disc image supplied by the application: readAt reads len bytes at offset into out and
+ * returns the number of bytes read (or -1), length returns the image size. close may be null.
+ */
+typedef struct AuroraDiscStream {
+  void* userData;
+  int64_t (*readAt)(void* userData, uint64_t offset, void* out, size_t len);
+  int64_t (*length)(void* userData);
+  void (*close)(void* userData);
+} AuroraDiscStream;
+
+/**
+ * Open a disc image through application-provided read callbacks (e.g. a browser File).
+ * Must be called before DVDInit(). Returns true on success, false on failure.
+ */
+bool aurora_dvd_open_stream(const AuroraDiscStream* stream);
 
 /**
  * Close the disc image and free all resources.

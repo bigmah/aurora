@@ -16,6 +16,13 @@ std::shared_ptr<wgpu::ChainedStruct> SetupWindowAndGetSurfaceDescriptorCocoa(SDL
 std::shared_ptr<wgpu::ChainedStruct> SetupWindowAndGetSurfaceDescriptor(SDL_Window* window) {
 #if defined(SDL_PLATFORM_MACOS) || defined(SDL_PLATFORM_IOS) || defined(SDL_PLATFORM_TVOS)
   return SetupWindowAndGetSurfaceDescriptorCocoa(window);
+#elif defined(__EMSCRIPTEN__)
+  // The selector string must outlive the descriptor; SDL owns the property.
+  const char* selector =
+      SDL_GetStringProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_EMSCRIPTEN_CANVAS_ID_STRING, "#canvas");
+  auto desc = std::make_shared<wgpu::EmscriptenSurfaceSourceCanvasHTMLSelector>();
+  desc->selector = selector;
+  return std::move(desc);
 #else
   const auto props = SDL_GetWindowProperties(window);
 #if defined(SDL_PLATFORM_ANDROID)

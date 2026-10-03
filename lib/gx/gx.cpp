@@ -603,7 +603,9 @@ void initialize() noexcept {
         .label = "GX Pipeline Layout",
         .bindGroupLayoutCount = layouts.size(),
         .bindGroupLayouts = layouts.data(),
+#ifndef AURORA_IMMEDIATES_AS_UNIFORM
         .immediateSize = sizeof(DrawImmediateData),
+#endif
     };
     sPipelineLayout = g_device.CreatePipelineLayout(&desc);
   }

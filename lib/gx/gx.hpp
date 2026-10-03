@@ -77,6 +77,12 @@ enum DirtyFlag : u8 {
   DirtyAll = DirtyPipeline | DirtyTextures | DirtyUniform | DirtyImmediates,
 };
 
+#ifdef __EMSCRIPTEN__
+// Browsers don't expose immediate data (var<immediate>): per-draw values go in a
+// second dynamic-offset uniform binding (group 1, binding 1) instead.
+#define AURORA_IMMEDIATES_AS_UNIFORM
+#endif
+
 struct DrawImmediateData {
   u32 vtxStart = 0;
   u32 currentPnMtx = 0;

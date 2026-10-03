@@ -191,6 +191,10 @@ size_t FrameSlotPool::free_count() const {
 }
 
 void initialize() {
+#ifdef __EMSCRIPTEN__
+  // No threads in web builds: work items run inline as they're enqueued.
+  return;
+#endif
   if (g_running.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
@@ -266,7 +270,13 @@ void synchronize() {
   sync->cv.wait(lock, [&] { return sync->complete; });
 }
 
-bool is_worker_thread() noexcept { return g_workerThreadId == std::this_thread::get_id(); }
+bool is_worker_thread() noexcept {
+#ifdef __EMSCRIPTEN__
+  return true; // the only thread does the render worker's job too
+#else
+  return g_workerThreadId == std::this_thread::get_id();
+#endif
+}
 
 bool is_idle() noexcept { return g_pendingItems.load(std::memory_order_acquire) == 0; }
 

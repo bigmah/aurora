@@ -647,6 +647,8 @@ void cbForPrepareStreamAsync(s32 result, DVDCommandBlock* block) {
 
 extern "C" {
 
+static bool openDiscStream(const NodDiscStream& stream);
+
 bool aurora_dvd_open(const char* disc_path) {
   if (disc_path == nullptr) {
     return false;
@@ -666,6 +668,27 @@ bool aurora_dvd_open(const char* disc_path) {
       .stream_len = sdlStreamLen,
       .close = sdlStreamClose,
   };
+  return openDiscStream(stream);
+}
+
+bool aurora_dvd_open_stream(const AuroraDiscStream* discStream) {
+  if (discStream == nullptr || discStream->readAt == nullptr || discStream->length == nullptr) {
+    return false;
+  }
+
+  s_worker.stop();
+  clearState();
+
+  const NodDiscStream stream{
+      .user_data = discStream->userData,
+      .read_at = discStream->readAt,
+      .stream_len = discStream->length,
+      .close = discStream->close,
+  };
+  return openDiscStream(stream);
+}
+
+static bool openDiscStream(const NodDiscStream& stream) {
   const NodDiscOptions options{
       .preloader_threads = 1,
   };
@@ -705,7 +728,10 @@ bool aurora_dvd_open(const char* disc_path) {
   s_currentDir = 0;
   s_currentPath = "/";
   s_initialized = true;
+#ifndef __EMSCRIPTEN__
+  // Without threads (web builds), commands run synchronously as they're issued.
   s_worker.start();
+#endif
   return true;
 }
 

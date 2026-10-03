@@ -2014,7 +2014,7 @@ struct Immediate {{
     array_start1: vec4u,
     array_start2: vec4u,
 }};
-var<immediate> imm: Immediate;
+{12}
 
 struct Uniform {{
     render_viewport_size: vec2f,
@@ -2045,7 +2045,13 @@ fn fs_main(in: VertexOutput) -> {10} {{{6}{5}{11}
 }}
 )""",
                   uniBufAttrs, texBindings, vtxOutAttrs, vtxInAttrs, vtxXfrAttrs, fragmentFn, fragmentFnPre,
-                  vtxXfrAttrsPre, uniformPre, fragmentOutput, fragmentOutputType, fragmentReturn);
+                  vtxXfrAttrsPre, uniformPre, fragmentOutput, fragmentOutputType, fragmentReturn,
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+                  "@group(1) @binding(1)\nvar<uniform> imm: Immediate;"
+#else
+                  "var<immediate> imm: Immediate;"
+#endif
+                  );
   if (dstAlphaMode == DstAlphaMode::DualSource) {
     shaderSource.insert(0, "enable dual_source_blending;\n");
   }

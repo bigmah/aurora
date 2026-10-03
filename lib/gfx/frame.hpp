@@ -12,6 +12,12 @@ inline constexpr size_t StagingBufferCount = FrameSlotCount + 3;
 inline constexpr uint64_t StagingBufferSize = UniformBufferSize + VertexBufferSize + IndexBufferSize +
                                               StorageBufferSize + (UseTextureBuffer ? TextureUploadSize : 0);
 
+#ifdef __EMSCRIPTEN__
+// Staging memory is CPU-side and uploaded with Queue writes (see frame.cpp).
+#define AURORA_CPU_STAGING
+const uint8_t* cpu_staging_buffer(size_t slot);
+#endif
+
 const wgpu::Buffer& staging_buffer(size_t slot);
 
 struct RegisteredDrawType {

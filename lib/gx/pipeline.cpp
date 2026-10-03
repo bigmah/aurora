@@ -63,8 +63,12 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
     return;
   }
   const auto& resources = gfx::detail::resources();
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+  const std::array offsets{data.uniformRange.offset, data.immediateRange.offset};
+#else
   pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
   const std::array offsets{data.uniformRange.offset};
+#endif
   pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());
   if (data.bindGroups.textureBindGroup) {
     pass.SetBindGroup(2, gfx::find_bind_group(data.bindGroups.textureBindGroup));

@@ -1135,7 +1135,12 @@ void rebuild_pipeline_cache() {
 }
 
 void initialize_pipeline_cache() {
+#ifdef __EMSCRIPTEN__
+  // No threads or persistent sqlite storage in the browser: build pipelines on demand.
+  g_pipelineCacheBroken = true;
+#else
   g_pipelineCacheBroken = false;
+#endif
   g_pipelineCacheWriterStop = false;
   g_pipelineThreadEnd = false;
   g_gpuCachePrunePending = false;

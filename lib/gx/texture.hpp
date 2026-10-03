@@ -26,7 +26,11 @@ const TextureStats& texture_stats() noexcept;
 namespace texture {
 constexpr uint64_t ContentCacheBudgetBytes = 128ull * 1024ull * 1024ull;
 constexpr uint64_t ObjectCacheIdleFrames = 600;
+#ifdef __EMSCRIPTEN__
+constexpr bool AsyncTextureReplacements = false; // no threads in web builds
+#else
 constexpr bool AsyncTextureReplacements = true;
+#endif
 constexpr uint32_t ReplacementThumbnailDim = 64;
 constexpr uint64_t ReplacementPublishBudgetBytes = 12ull * 1024ull * 1024ull;
 

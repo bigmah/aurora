@@ -1,6 +1,11 @@
 include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/AuroraTargetPlatform.cmake")
 
+# A nod::nod defined by the parent project (e.g. a minimal reader for web builds) wins.
+if (TARGET nod::nod)
+  return()
+endif ()
+
 # Resolve nod dependency based on AURORA_NOD_PROVIDER.
 #
 # After this module runs:

@@ -350,6 +350,15 @@ void copy_staging_buffer_range(wgpu::CommandEncoder& cmd, const FramePacket& fra
   }
   const uint32_t copyStart = align_down_copy_offset(copied);
   const uint32_t copyEnd = AURORA_ALIGN(highWater, 4);
+#ifdef AURORA_CPU_STAGING
+  // Queue writes land before this frame's command buffer runs. Ranges only grow
+  // within a frame, so that's equivalent to the in-encoder copy.
+  (void)cmd;
+  webgpu::g_queue.WriteBuffer(dst, copyStart, cpu_staging_buffer(frame.stagingBuffer) + stagingOffset + copyStart,
+                              copyEnd - copyStart);
+  copied = highWater;
+  return;
+#endif
   cmd.CopyBufferToBuffer(staging_buffer(frame.stagingBuffer), stagingOffset + copyStart, dst, copyStart,
                          copyEnd - copyStart);
   copied = highWater;
@@ -384,6 +393,21 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
   if constexpr (UseTextureBuffer) {
     for (size_t i = frame.copied.textureUploadCount; i < op.textureUploads.size(); ++i) {
       const auto& item = *op.textureUploads[i];
+#ifdef AURORA_CPU_STAGING
+      if (!item.buffer) {
+        const wgpu::TexelCopyBufferLayout layout{
+            .offset = 0,
+            .bytesPerRow = AURORA_ALIGN(item.layout.bytesPerRow, 256),
+            .rowsPerImage = item.layout.rowsPerImage,
+        };
+        const uint8_t* src =
+            cpu_staging_buffer(frame.stagingBuffer) + TextureUploadStagingOffset + item.layout.offset;
+        const uint64_t rows = item.layout.rowsPerImage != 0 ? item.layout.rowsPerImage : item.size.height;
+        const uint64_t dataSize = layout.bytesPerRow * rows * std::max(item.size.depthOrArrayLayers, 1u);
+        webgpu::g_queue.WriteTexture(&item.tex, src, dataSize, &layout, &item.size);
+        continue;
+      }
+#endif
       const wgpu::TexelCopyBufferInfo buf{
           .layout =
               wgpu::TexelCopyBufferLayout{

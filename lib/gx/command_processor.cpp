@@ -470,6 +470,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       .idxRange = idxRange,
       .uniformRange = cache.uniformRange,
       .immediateData = immediates,
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+      .immediateRange = gfx::push_uniform(immediates),
+#endif
       .vtxCount = vtxCount,
       .indexCount = numIndices,
       .instanceCount = instanceCount,

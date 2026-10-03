@@ -30,6 +30,10 @@
 #include <tracy/Tracy.hpp>
 #include <magic_enum.hpp>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 namespace aurora::gfx {
 using namespace detail;
 using webgpu::g_device;
@@ -48,6 +52,12 @@ enum class BufferMapState {
 };
 
 std::array<wgpu::Buffer, StagingBufferCount> g_stagingBuffers;
+#ifdef AURORA_CPU_STAGING
+// Browsers only finish buffer mapping between tasks, and unmapping copies the
+// whole mapped range. Staging lives in wasm memory instead and each frame's
+// used ranges are uploaded with Queue::WriteBuffer/WriteTexture.
+std::array<std::vector<uint8_t>, StagingBufferCount> g_cpuStaging;
+#endif
 std::array<std::atomic<BufferMapState>, StagingBufferCount> g_mappingStates;
 uint32_t g_frameIndex = UINT32_MAX;
 
@@ -179,7 +189,13 @@ void wait_for_gpu_progress(std::chrono::nanoseconds sleepDuration) {
   if (render_worker::is_idle()) {
     enqueue_process_events();
   }
+#ifdef __EMSCRIPTEN__
+  // Yield to the browser so pending WebGPU callbacks can run.
+  (void)sleepDuration;
+  emscripten_sleep(1);
+#else
   std::this_thread::sleep_for(sleepDuration);
+#endif
 }
 
 void pace_frame_start() {
@@ -214,6 +230,16 @@ void pace_frame_start() {
 }
 
 void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+#ifdef AURORA_CPU_STAGING
+  if (g_cpuStaging[slot].empty()) {
+    g_cpuStaging[slot].resize(StagingBufferSize + 0x10000); // slack for the last texture row
+  }
+  g_mappingStates[slot].store(BufferMapState::Mapped, std::memory_order_release);
+  if (releaseSlotOnCompletion) {
+    g_stagingSlots.release(slot);
+  }
+  return;
+#endif
   auto expected = BufferMapState::Unmapped;
   if (!g_mappingStates[slot].compare_exchange_strong(expected, BufferMapState::Mapping, std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
@@ -246,6 +272,10 @@ namespace detail {
 Resources& resources() noexcept { return g_resources; }
 
 const wgpu::Buffer& staging_buffer(size_t slot) { return g_stagingBuffers[slot]; }
+
+#ifdef AURORA_CPU_STAGING
+const uint8_t* cpu_staging_buffer(size_t slot) { return g_cpuStaging[slot].data(); }
+#endif
 
 std::optional<RegisteredDrawType> find_runtime_draw_type(DrawTypeId id) {
   std::lock_guard lock{g_runtimeTypeMutex};
@@ -426,17 +456,21 @@ void initialize() {
                "Shared Index Buffer");
   createBuffer(g_resources.storageBuffer, wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst, StorageBufferSize,
                "Shared Storage Buffer");
+#ifndef AURORA_CPU_STAGING
   for (size_t i = 0; i < g_stagingBuffers.size(); ++i) {
     const auto label = fmt::format("Staging Buffer {}", i);
     createBuffer(g_stagingBuffers[i], wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc, StagingBufferSize,
                  label.c_str());
   }
+#endif
   for (auto& state : g_mappingStates) {
     state.store(BufferMapState::Unmapped, std::memory_order_release);
   }
+#ifndef AURORA_CPU_STAGING
   for (size_t slot = 0; slot < g_stagingBuffers.size(); ++slot) {
     map_staging_buffer(slot);
   }
+#endif
 
   {
     constexpr std::array layoutEntries{
@@ -496,6 +530,19 @@ void initialize() {
                     .hasDynamicOffset = true,
                 },
         },
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+        // GX per-draw data (gx::DrawImmediateData)
+        wgpu::BindGroupLayoutEntry{
+            .binding = 1,
+            .visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment,
+            .buffer =
+                wgpu::BufferBindingLayout{
+                    .type = wgpu::BufferBindingType::Uniform,
+                    .hasDynamicOffset = true,
+                    .minBindingSize = sizeof(gx::DrawImmediateData),
+                },
+        },
+#endif
     };
     const wgpu::BindGroupLayoutDescriptor layoutDesc{
         .label = "Uniform bind group layout",
@@ -509,6 +556,13 @@ void initialize() {
             .buffer = g_resources.uniformBuffer,
             .size = gx::MaxUniformSize,
         },
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+        wgpu::BindGroupEntry{
+            .binding = 1,
+            .buffer = g_resources.uniformBuffer,
+            .size = sizeof(gx::DrawImmediateData),
+        },
+#endif
     };
     const wgpu::BindGroupDescriptor bindGroupDescriptor{
         .label = "Uniform bind group",
@@ -641,7 +695,12 @@ bool begin_frame() {
     if (size <= 0) {
       return;
     }
+#ifdef AURORA_CPU_STAGING
+    (void)stagingBuf;
+    buf = ByteBuffer{g_cpuStaging[*stagingSlot].data() + bufferOffset, static_cast<size_t>(size)};
+#else
     buf = ByteBuffer{static_cast<u8*>(stagingBuf.GetMappedRange(bufferOffset, size)), static_cast<size_t>(size)};
+#endif
     bufferOffset += size;
   };
   mapBuffer(frame.verts, VertexBufferSize);
@@ -681,7 +740,9 @@ void end_frame(EndFrameCallback callback) {
   const size_t stagingSlot = frame.stagingBuffer;
   render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, callback = std::move(callback)]() mutable {
     auto& packet = g_framePackets[frameSlot];
+#ifndef AURORA_CPU_STAGING
     g_stagingBuffers[stagingSlot].Unmap();
+#endif
     g_mappingStates[stagingSlot].store(BufferMapState::Unmapped, std::memory_order_release);
     auto encoder = std::move(packet.encoder);
     const auto stats = packet.stats;
