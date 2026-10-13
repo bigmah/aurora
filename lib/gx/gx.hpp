@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <cstring>
 #include <bitset>
+#include <functional>
 #include <memory>
 #include <array>
 #include <cfloat>
@@ -544,9 +545,13 @@ struct BindGroupRanges {
   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
 };
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept;
+// With onAsync set, the pipeline is compiled in the background (createRenderPipelineAsync) and handed to
+// onAsync (null on failure); build_pipeline then returns null.
+using AsyncPipelineCallback = std::function<void(wgpu::RenderPipeline)>;
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
-                                    wgpu::ShaderModule shader, const char* label) noexcept;
+                                    wgpu::ShaderModule shader, const char* label,
+                                    AsyncPipelineCallback onAsync = {}) noexcept;
 std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
                                 uint32_t normalAttachment = UINT32_MAX) noexcept;
 wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,

@@ -329,7 +329,8 @@ const gfx::TextureBind& get_texture(GXTexMapID id) noexcept { return g_gxState.t
 
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
-                                    wgpu::ShaderModule shader, const char* label) noexcept {
+                                    wgpu::ShaderModule shader, const char* label,
+                                    AsyncPipelineCallback onAsync) noexcept {
   ZoneScoped;
   const float depthBias = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetBits);
   const float depthBiasSlopeScale = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetScaleBits);
@@ -377,6 +378,15 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
       .multisample = wgpu::MultisampleState{.count = layout.sampleCount},
       .fragment = &fragmentState,
   };
+  if (onAsync) {
+    g_device.CreateRenderPipelineAsync(
+        &descriptor, wgpu::CallbackMode::AllowSpontaneous,
+        [cb = std::move(onAsync)](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
+                                  wgpu::StringView) {
+          cb(status == wgpu::CreatePipelineAsyncStatus::Success ? std::move(pipeline) : wgpu::RenderPipeline{});
+        });
+    return {};
+  }
   return g_device.CreateRenderPipeline(&descriptor);
 }
 

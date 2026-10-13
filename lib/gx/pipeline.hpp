@@ -46,6 +46,9 @@ struct PipelineOptions {
 };
 
 gfx::CompiledPipeline create_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout);
+// Compiles in the background; done gets the pipeline (empty on failure).
+void create_pipeline_async(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
+                           std::function<void(gfx::CompiledPipeline)> done);
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass);
 
 void queue_surface(const u8* dlStart, uint32_t dlSize, bool bigEndian) noexcept;

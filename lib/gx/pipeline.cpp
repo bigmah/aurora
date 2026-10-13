@@ -10,23 +10,21 @@
 
 #include <tracy/Tracy.hpp>
 
+#include <memory>
+#include <optional>
+
 namespace aurora::gx {
 
-gfx::CompiledPipeline create_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout) {
-  ZoneScoped;
-  const auto hash = xxh3_hash(layout.key, xxh3_hash(config, static_cast<HashType>(gfx::ShaderType::GX)));
-  const auto create = [&](const PipelineOptions& options, const char* passName) {
-    const auto shader = build_shader(config.shaderConfig, layout, options.dstAlphaMode);
-    const auto label = fmt::format("GX Pipeline {:x} {}", hash, passName);
-    return build_pipeline(config, layout, options, {}, shader, label.c_str());
-  };
-
-  PipelineOptions options{
+namespace {
+// The passes a config needs: an optional alpha prepass, then the main pass.
+void pipeline_passes(const PipelineConfig& config, const gfx::RenderTargetLayout& layout, PipelineOptions& main,
+                     std::optional<PipelineOptions>& prepass) {
+  main = PipelineOptions{
       .colorUpdate = config.colorUpdate,
       .alphaUpdate = config.alphaUpdate,
       .depthUpdate = config.depthUpdate,
   };
-  gfx::CompiledPipeline pipeline;
+  prepass.reset();
   if (config.alphaUpdate && config.dstAlpha != UINT32_MAX && config.dstAlpha != 0) {
     const auto usesSourceAlpha = [](GXBlendFactor factor) {
       return factor == GX_BL_SRCALPHA || factor == GX_BL_INVSRCALPHA;
@@ -34,27 +32,75 @@ gfx::CompiledPipeline create_pipeline(const PipelineConfig& config, const gfx::R
     const bool needsSourceAlpha = config.colorUpdate && config.blendMode == GX_BM_BLEND &&
                                   (usesSourceAlpha(config.blendFacSrc) || usesSourceAlpha(config.blendFacDst));
     if (!needsSourceAlpha) {
-      options.dstAlphaMode = DstAlphaMode::Replace;
+      main.dstAlphaMode = DstAlphaMode::Replace;
     } else if (webgpu::g_dualSourceBlendingSupported && layout.colorAttachmentCount == 1) {
-      options.dstAlphaMode = DstAlphaMode::DualSource;
+      main.dstAlphaMode = DstAlphaMode::DualSource;
     } else {
       // Write alpha before RGB, no depth write
-      auto alpha = options;
+      auto alpha = main;
       alpha.dstAlphaMode = DstAlphaMode::Replace;
       alpha.colorUpdate = false;
       alpha.depthUpdate = false;
-      pipeline.prepass = create(alpha, "alpha");
-      if (!pipeline.prepass) {
-        return {};
-      }
-      options.alphaUpdate = false;
+      prepass = alpha;
+      main.alphaUpdate = false;
     }
   }
-  pipeline.main = create(options, "main");
+}
+
+wgpu::RenderPipeline build_pass(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
+                                const PipelineOptions& options, const char* passName, AsyncPipelineCallback onAsync) {
+  const auto hash = xxh3_hash(layout.key, xxh3_hash(config, static_cast<HashType>(gfx::ShaderType::GX)));
+  const auto shader = build_shader(config.shaderConfig, layout, options.dstAlphaMode);
+  const auto label = fmt::format("GX Pipeline {:x} {}", hash, passName);
+  return build_pipeline(config, layout, options, {}, shader, label.c_str(), std::move(onAsync));
+}
+} // namespace
+
+gfx::CompiledPipeline create_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout) {
+  ZoneScoped;
+  PipelineOptions options;
+  std::optional<PipelineOptions> prepass;
+  pipeline_passes(config, layout, options, prepass);
+  gfx::CompiledPipeline pipeline;
+  if (prepass) {
+    pipeline.prepass = build_pass(config, layout, *prepass, "alpha", {});
+    if (!pipeline.prepass) {
+      return {};
+    }
+  }
+  pipeline.main = build_pass(config, layout, options, "main", {});
   if (!pipeline.main) {
     return {};
   }
   return pipeline;
+}
+
+void create_pipeline_async(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
+                           std::function<void(gfx::CompiledPipeline)> done) {
+  ZoneScoped;
+  PipelineOptions options;
+  std::optional<PipelineOptions> prepass;
+  pipeline_passes(config, layout, options, prepass);
+  struct State {
+    gfx::CompiledPipeline result;
+    int remaining;
+    bool failed = false;
+    std::function<void(gfx::CompiledPipeline)> done;
+  };
+  auto state = std::make_shared<State>(State{.remaining = prepass ? 2 : 1, .done = std::move(done)});
+  const auto finish = [state](bool isPrepass, wgpu::RenderPipeline pipeline) {
+    if (!pipeline) {
+      state->failed = true;
+    }
+    (isPrepass ? state->result.prepass : state->result.main) = std::move(pipeline);
+    if (--state->remaining == 0) {
+      state->done(state->failed ? gfx::CompiledPipeline{} : std::move(state->result));
+    }
+  };
+  if (prepass) {
+    build_pass(config, layout, *prepass, "alpha", [finish](wgpu::RenderPipeline p) { finish(true, std::move(p)); });
+  }
+  build_pass(config, layout, options, "main", [finish](wgpu::RenderPipeline p) { finish(false, std::move(p)); });
 }
 
 void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {

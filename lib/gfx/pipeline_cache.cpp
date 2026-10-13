@@ -23,6 +23,9 @@
 #include <optional>
 #include <ranges>
 #include <variant>
+#include <vector>
+#include <cstdio>
+#include <cstring>
 #include <thread>
 
 #include <SDL3/SDL_iostream.h>
@@ -39,10 +42,13 @@ constexpr const char* InitialPipelineCacheName = "initial_pipeline_cache.db";
 constexpr const char* SdlVfsName = "aurora_pipeline_cache_sdl_vfs";
 
 using NewPipelineCallback = std::function<CompiledPipeline()>;
+// Starts a background compile that calls back with the pipeline (browser: createRenderPipelineAsync).
+using AsyncPipelineCallback = std::function<void(std::function<void(CompiledPipeline)>)>;
 
 struct PendingPipeline {
   PipelineRef hash;
   NewPipelineCallback create;
+  AsyncPipelineCallback createAsync;
 };
 
 struct PipelineCacheWrite {
@@ -91,6 +97,18 @@ static std::deque<PendingPipeline> g_pipelineQueue;
 static std::deque<PendingPipeline> g_backgroundPipelineQueue;
 static absl::flat_hash_set<PipelineRef> g_pendingPipelines;
 static std::atomic_bool g_gpuCachePrunePending = false;
+#ifdef __EMSCRIPTEN__
+// Browser: no pipeline thread. A draw never waits a frame for its pipeline (that drew the scene with
+// pieces missing): it's built on the spot. Pipelines remembered from earlier runs
+// (WebPipelineFileName in userPath, plus a bundled InitialPipelineFileName) are compiled ahead with
+// createRenderPipelineAsync, which doesn't stall rendering the way createRenderPipeline does.
+constexpr const char* WebPipelineFileName = "pipeline_cache.bin";
+constexpr const char* InitialWebPipelineFileName = "initial_pipeline_cache.bin";
+constexpr uint32_t WebPipelineFileMagic = 0x43505541; // "AUPC"
+constexpr size_t MaxAsyncPipelinesInFlight = 16;
+constexpr size_t MaxAsyncPipelinesPerFrame = 8;
+static absl::flat_hash_set<PipelineRef> g_asyncInFlight;
+#endif
 
 static sqlite3* g_pipelineCacheDb = nullptr;
 static sqlite3_stmt* g_pipelineCacheLoadStmt = nullptr;
@@ -366,7 +384,15 @@ static PipelineCacheWrite make_pipeline_cache_write(ShaderType type, PipelineRef
   return write;
 }
 
+#ifdef __EMSCRIPTEN__
+static void web_append_pipeline_record(const PipelineCacheWrite& write);
+#endif
+
 static void enqueue_pipeline_cache_write(PipelineCacheWrite write) {
+#ifdef __EMSCRIPTEN__
+  web_append_pipeline_record(write);
+  return;
+#endif
   if (g_pipelineCacheBroken || g_pipelineCacheDb == nullptr) {
     return;
   }
@@ -443,6 +469,9 @@ static void remember_pipeline_config(ShaderType type, const Config& config, uint
     std::lock_guard lock{g_pipelineMutex};
     auto [it, inserted] = g_knownPipelines.try_emplace(cacheKey, KnownPipeline{type, config, firstFrameUsed});
     changed = inserted || firstFrameUsed < it->second.firstFrameUsed;
+#ifdef __EMSCRIPTEN__
+    changed = inserted; // the browser's file is append-only: one record per config
+#endif
     it->second.firstFrameUsed = std::min(it->second.firstFrameUsed, firstFrameUsed);
   }
   if (persist && changed) {
@@ -451,8 +480,19 @@ static void remember_pipeline_config(ShaderType type, const Config& config, uint
 }
 
 static PipelineRef find_pipeline_impl(PipelineRef runtimeKey, NewPipelineCallback&& cb,
-                                      PipelinePriority priority = PipelinePriority::Normal) {
+                                      PipelinePriority priority = PipelinePriority::Normal,
+                                      AsyncPipelineCallback&& createAsync = {}) {
   ZoneScoped;
+#ifdef __EMSCRIPTEN__
+  if (priority == PipelinePriority::Normal) {
+    priority = PipelinePriority::Blocking;
+  } else if (priority == PipelinePriority::Background) {
+    std::scoped_lock guard{g_pipelineMutex};
+    if (g_asyncInFlight.contains(runtimeKey)) {
+      return runtimeKey;
+    }
+  }
+#endif
 
   const bool blocking = priority == PipelinePriority::Blocking;
   bool notifyWorker = false;
@@ -492,6 +532,7 @@ static PipelineRef find_pipeline_impl(PipelineRef runtimeKey, NewPipelineCallbac
       PendingPipeline pending{
           .hash = runtimeKey,
           .create = std::move(cb),
+          .createAsync = std::move(createAsync),
       };
       switch (priority) {
       case PipelinePriority::Background:
@@ -528,7 +569,14 @@ static PipelineRef find_pipeline_impl(PipelineRef runtimeKey, NewPipelineCallbac
 static PipelineRef resolve_pipeline(ShaderType type, const gx::PipelineConfig& config, const RenderTargetLayout& layout,
                                     PipelinePriority priority) {
   const auto runtimeKey = xxh3_hash(layout.key, xxh3_hash(config, static_cast<HashType>(type)));
-  return find_pipeline_impl(runtimeKey, [config, layout] { return create_pipeline(config, layout); }, priority);
+  AsyncPipelineCallback createAsync;
+#ifdef __EMSCRIPTEN__
+  createAsync = [config, layout](std::function<void(CompiledPipeline)> done) {
+    gx::create_pipeline_async(config, layout, std::move(done));
+  };
+#endif
+  return find_pipeline_impl(
+      runtimeKey, [config, layout] { return create_pipeline(config, layout); }, priority, std::move(createAsync));
 }
 
 static PipelineRef resolve_pipeline(ShaderType type, const clear::PipelineConfig& config,
@@ -1044,7 +1092,178 @@ static size_t load_pipeline_cache_entries(ShaderType type, uint32_t configVersio
   return acceptedRows;
 }
 
+#ifdef __EMSCRIPTEN__
+struct WebPipelineRecord {
+  uint8_t type;
+  uint8_t pad[3];
+  uint32_t configVersion;
+  uint32_t configSize;
+  uint32_t firstFrameUsed;
+};
+
+static std::string web_pipeline_path(const char* dir, const char* name) {
+  std::string path{dir != nullptr ? dir : ""};
+  if (!path.empty() && path.back() != '/') {
+    path += '/';
+  }
+  return path + name;
+}
+
+static void web_append_pipeline_record(const PipelineCacheWrite& write) {
+  const auto path = web_pipeline_path(g_config.userPath, WebPipelineFileName);
+  FILE* file = std::fopen(path.c_str(), "ab");
+  if (file == nullptr) {
+    return;
+  }
+  std::fseek(file, 0, SEEK_END);
+  if (std::ftell(file) == 0) {
+    const uint32_t header[2]{WebPipelineFileMagic, PipelineCacheSchema};
+    std::fwrite(header, sizeof(header), 1, file);
+  }
+  const WebPipelineRecord record{
+      .type = underlying(write.type),
+      .configVersion = write.configVersion,
+      .configSize = static_cast<uint32_t>(write.config.size()),
+      .firstFrameUsed = write.firstFrameUsed,
+  };
+  std::fwrite(&record, sizeof(record), 1, file);
+  std::fwrite(write.config.data(), 1, write.config.size(), file);
+  std::fclose(file);
+}
+
+template <typename Config>
+static bool web_remember_record(ShaderType type, uint32_t configVersion, const WebPipelineRecord& record,
+                                const uint8_t* data) {
+  if (record.configVersion != configVersion || record.configSize != sizeof(Config)) {
+    return false;
+  }
+  Config config;
+  std::memcpy(&config, data, sizeof(config));
+  if (config.version != configVersion) {
+    return false;
+  }
+  remember_pipeline_config(type, config, record.firstFrameUsed, false);
+  return true;
+}
+
+static size_t web_load_pipeline_file(const std::string& path) {
+  FILE* file = std::fopen(path.c_str(), "rb");
+  if (file == nullptr) {
+    return 0;
+  }
+  std::vector<uint8_t> bytes;
+  std::fseek(file, 0, SEEK_END);
+  const long size = std::ftell(file);
+  std::fseek(file, 0, SEEK_SET);
+  if (size > 0) {
+    bytes.resize(static_cast<size_t>(size));
+    if (std::fread(bytes.data(), 1, bytes.size(), file) != bytes.size()) {
+      bytes.clear();
+    }
+  }
+  std::fclose(file);
+
+  uint32_t header[2]{};
+  if (bytes.size() < sizeof(header)) {
+    return 0;
+  }
+  std::memcpy(header, bytes.data(), sizeof(header));
+  if (header[0] != WebPipelineFileMagic || header[1] != PipelineCacheSchema) {
+    Log.warn("Ignoring pipeline list '{}' (old format)", path);
+    return 0;
+  }
+  size_t accepted = 0;
+  size_t skipped = 0;
+  for (size_t pos = sizeof(header); pos + sizeof(WebPipelineRecord) <= bytes.size();) {
+    WebPipelineRecord record;
+    std::memcpy(&record, bytes.data() + pos, sizeof(record));
+    pos += sizeof(record);
+    if (record.configSize > bytes.size() - pos) {
+      break; // truncated write
+    }
+    const uint8_t* data = bytes.data() + pos;
+    pos += record.configSize;
+    bool ok = false;
+    switch (static_cast<ShaderType>(record.type)) {
+    case ShaderType::Clear:
+      ok = web_remember_record<clear::PipelineConfig>(ShaderType::Clear, clear::ClearPipelineConfigVersion, record,
+                                                      data);
+      break;
+    case ShaderType::GX:
+      ok = web_remember_record<gx::PipelineConfig>(ShaderType::GX, gx::GXPipelineConfigVersion, record, data);
+      break;
+    default:
+      break;
+    }
+    ok ? ++accepted : ++skipped;
+  }
+  Log.info("Loaded {} pipelines from '{}' ({} skipped)", accepted, path, skipped);
+  return accepted;
+}
+
+static size_t web_load_pipeline_files() {
+  size_t count = web_load_pipeline_file(web_pipeline_path(g_config.resourcesPath, InitialWebPipelineFileName));
+  count += web_load_pipeline_file(web_pipeline_path(g_config.userPath, WebPipelineFileName));
+  return count;
+}
+
+// Starts background compiles of queued pipelines (at most MaxAsyncPipelinesPerFrame per frame).
+static void pump_async_pipelines() {
+  for (size_t started = 0; started < MaxAsyncPipelinesPerFrame;) {
+    PendingPipeline pending;
+    bool alreadyBuilt = false;
+    {
+      std::scoped_lock guard{g_pipelineMutex};
+      if (g_asyncInFlight.size() >= MaxAsyncPipelinesInFlight) {
+        return;
+      }
+      auto& source = !g_pipelineQueue.empty() ? g_pipelineQueue : g_backgroundPipelineQueue;
+      if (source.empty()) {
+        return;
+      }
+      pending = std::move(source.front());
+      source.pop_front();
+      g_pendingPipelines.erase(pending.hash);
+      alreadyBuilt = g_pipelines.contains(pending.hash);
+      if (!alreadyBuilt && pending.createAsync) {
+        g_asyncInFlight.insert(pending.hash);
+      }
+    }
+    if (alreadyBuilt) {
+      notify_pipeline_ready(true, 0);
+      continue;
+    }
+    ++started;
+    if (!pending.createAsync) {
+      auto result = pending.create();
+      const auto count = result.pipeline_count();
+      {
+        std::scoped_lock guard{g_pipelineMutex};
+        g_pipelines.try_emplace(pending.hash, std::move(result));
+      }
+      notify_pipeline_ready(true, count);
+      continue;
+    }
+    pending.createAsync([hash = pending.hash](CompiledPipeline result) {
+      const auto count = result.pipeline_count();
+      {
+        std::scoped_lock guard{g_pipelineMutex};
+        g_asyncInFlight.erase(hash);
+        if (result.main) {
+          // A draw may have built it synchronously in the meantime; keep that one.
+          g_pipelines.try_emplace(hash, std::move(result));
+        }
+      }
+      notify_pipeline_ready(true, count);
+    });
+  }
+}
+#endif
+
 static size_t load_pipeline_cache() {
+#ifdef __EMSCRIPTEN__
+  return web_load_pipeline_files();
+#endif
   if (!prepare_pipeline_cache_db()) {
     return 0;
   }
@@ -1183,6 +1402,9 @@ void shutdown_pipeline_cache() {
   g_pipelineQueue.clear();
   g_backgroundPipelineQueue.clear();
   g_pendingPipelines.clear();
+#ifdef __EMSCRIPTEN__
+  g_asyncInFlight.clear();
+#endif
 
   queuedPipelines = 0;
   createdPipelines = 0;
@@ -1198,6 +1420,10 @@ void begin_pipeline_frame() {
 }
 
 void end_pipeline_frame() {
+#ifdef __EMSCRIPTEN__
+  pump_async_pipelines();
+  return;
+#endif
   if (!g_hasPipelineThread) {
     pipeline_worker();
   }
