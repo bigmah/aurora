@@ -623,9 +623,9 @@ ECardResult CardRawFile::getStatus(uint32_t fileNo, CardStat& statOut) const {
   } else {
     uint32_t cur = file->m_iconAddress;
     statOut.x3c_offsetBanner = cur;
+    // BannerSize already includes the C8 banner's TLUT.
+    statOut.x40_offsetBannerTlut = cur + BannerSize(statOut.GetBannerFormat()) - TlutSize(statOut.GetBannerFormat());
     cur += BannerSize(statOut.GetBannerFormat());
-    statOut.x40_offsetBannerTlut = cur;
-    cur += TlutSize(statOut.GetBannerFormat());
     bool palette = false;
     for (size_t i = 0; i < statOut.x44_offsetIcon.size(); ++i) {
       statOut.x44_offsetIcon[i] = cur;
