@@ -1520,8 +1520,11 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
     CHECK(stage.texMapId != GX_TEXMAP_NULL, "unmapped texture for stage {}", i);
     CHECK(stage.texCoordId != GX_TEXCOORD_NULL, "unmapped texcoord for stage {}", i);
     if (uvIn.empty()) {
-      // No indirect texturing
-      uvIn = fmt::format("tex{0}_uv", underlying(stage.texCoordId));
+      // No indirect texturing. As on hardware, normalized texcoords become
+      // texels through the SU scale registers (set to the texture size by
+      // GX, or by hand: GXSetTexCoordScaleManually, GD display lists).
+      uvIn = fmt::format("tex{0}_uv * ubuf.texcoord_scale[{0}].xy / ubuf.tex{1}_size_bias.xy",
+                         underlying(stage.texCoordId), underlying(stage.texMapId));
     }
     fragmentFnPre +=
         fmt::format("\n    var sampled{0} = textureSampleBias(tex{1}, tex{1}_samp, {2}, ubuf.tex{1}_size_bias.z);", i,
