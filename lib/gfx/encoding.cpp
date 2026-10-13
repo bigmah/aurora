@@ -37,7 +37,8 @@ WGPURenderPipeline g_currentPipeline = nullptr;
 void apply_viewport(const wgpu::RenderPassEncoder& pass, const Viewport& vp) {
   const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
   const float maxDepth = gx::UseReversedZ ? 1.f - vp.znear : vp.zfar;
-  pass.SetViewport(vp.left, vp.top, vp.width, vp.height, minDepth, maxDepth);
+  // WebGPU requires a [0, 1] depth range (games may pass e.g. -1..1).
+  pass.SetViewport(vp.left, vp.top, vp.width, vp.height, std::clamp(minDepth, 0.f, 1.f), std::clamp(maxDepth, 0.f, 1.f));
 }
 
 void apply_scissor(const wgpu::RenderPassEncoder& pass, const ClipRect& sc, const wgpu::Extent3D& size) {

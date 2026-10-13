@@ -54,7 +54,9 @@ uint32_t clamp_scissor_coord(double value, uint32_t maximum) noexcept {
 
 void set_present_viewport(const wgpu::RenderPassEncoder& pass, const gfx::Viewport& viewport, uint32_t surfaceWidth,
                           uint32_t surfaceHeight) noexcept {
-  pass.SetViewport(viewport.left, viewport.top, viewport.width, viewport.height, viewport.znear, viewport.zfar);
+  // WebGPU requires a [0, 1] depth range (games may pass e.g. -1..1).
+  pass.SetViewport(viewport.left, viewport.top, viewport.width, viewport.height, std::clamp(viewport.znear, 0.f, 1.f),
+                   std::clamp(viewport.zfar, 0.f, 1.f));
   const auto scissorX = clamp_scissor_coord(std::floor(viewport.left), surfaceWidth);
   const auto scissorY = clamp_scissor_coord(std::floor(viewport.top), surfaceHeight);
   const auto scissorRight = clamp_scissor_coord(std::ceil(viewport.left + viewport.width), surfaceWidth);
