@@ -506,6 +506,7 @@ void start_offscreen(uint32_t width, uint32_t height) {
   g_recorder.inOffscreen = true;
 
   g_recorder.cachedViewport = {0.f, 0.f, static_cast<float>(width), static_cast<float>(height), 0.f, 1.f};
+  gx::fit_render_viewport(g_recorder.cachedViewport); // fills the target: no clip-space remap
   g_recorder.cachedScissor = {0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_recorder.cachedViewport});
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_recorder.cachedScissor});
@@ -533,6 +534,7 @@ void restore_efb() {
   set_efb_targets(current_render_passes()[g_recorder.currentRenderPass]);
 
   g_recorder.cachedViewport = g_recorder.suspendedEfbViewport;
+  gx::fit_render_viewport(gx::g_gxState.renderViewport); // the EFB's clip-space remap again
   g_recorder.cachedScissor = g_recorder.suspendedEfbScissor;
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_recorder.cachedViewport});
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_recorder.cachedScissor});
@@ -580,7 +582,7 @@ void begin_recording(FramePacket& packet, size_t frameSlot) {
   pass.colorAttachments[SceneColorAttachmentIndex].clearValue = gx::g_gxState.clearColor;
   pass.clearDepthValue = gx::clear_depth_value();
   g_recorder.currentRenderPass = 0;
-  g_recorder.cachedViewport = gx::map_logical_viewport(gx::g_gxState.logicalViewport);
+  g_recorder.cachedViewport = gx::fit_render_viewport(gx::map_logical_viewport(gx::g_gxState.logicalViewport));
   g_recorder.cachedScissor = gx::map_logical_scissor(gx::g_gxState.logicalScissor);
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_recorder.cachedViewport});
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_recorder.cachedScissor});
@@ -762,6 +764,7 @@ void begin_color_pass(const ColorPassDescriptor& desc) {
 
   g_recorder.cachedViewport = {
       0.f, 0.f, static_cast<float>(desc.targetSize.width), static_cast<float>(desc.targetSize.height), 0.f, 1.f};
+  gx::fit_render_viewport(g_recorder.cachedViewport);
   g_recorder.cachedScissor = {0, 0, static_cast<int32_t>(desc.targetSize.width),
                               static_cast<int32_t>(desc.targetSize.height)};
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_recorder.cachedViewport});

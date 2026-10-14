@@ -403,6 +403,11 @@ struct GXState {
   AuroraViewportPolicy viewportPolicy = AURORA_VIEWPORT_FIT;
   gfx::Viewport logicalViewport{0.f, 0.f, 640.f, 480.f, 0.f, 1.f};
   gfx::Viewport renderViewport{0.f, 0.f, 640.f, 480.f, 0.f, 1.f};
+  // A viewport reaching outside the render target (GX allows it: a 480-row viewport on a 448-row EFB)
+  // is rejected by WebGPU implementations that follow the spec's bounds (WebKit), losing the frame.
+  // The viewport sent to WebGPU is clipped to the target, and clip space is remapped so every vertex
+  // lands on the same pixel: x' = x * fix.x + w * fix.y, y' = y * fix.z + w * fix.w.
+  Vec4<float> viewportFix{1.f, 0.f, 1.f, 0.f};
   gfx::ClipRect logicalScissor{0, 0, 640, 480};
   gfx::ClipRect renderScissor{0, 0, 640, 480};
 
@@ -450,6 +455,8 @@ void evict_texture_object(u32 texObjId) noexcept;
 void evict_tlut_object(u32 tlutObjId) noexcept;
 Vec2<uint32_t> logical_fb_size() noexcept;
 gfx::Viewport map_logical_viewport(const gfx::Viewport& logicalViewport) noexcept;
+// The part of a render viewport inside the current render target; updates g_gxState.viewportFix to match.
+gfx::Viewport fit_render_viewport(const gfx::Viewport& viewport) noexcept;
 gfx::ClipRect map_logical_scissor(const gfx::ClipRect& logicalScissor) noexcept;
 void set_logical_viewport(const gfx::Viewport& viewport) noexcept;
 void set_render_viewport(const gfx::Viewport& viewport) noexcept;

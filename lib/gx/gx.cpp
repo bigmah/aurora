@@ -306,13 +306,42 @@ void set_logical_viewport(const gfx::Viewport& viewport) noexcept {
   set_render_viewport(map_logical_viewport(viewport));
 }
 
+gfx::Viewport fit_render_viewport(const gfx::Viewport& viewport) noexcept {
+  const auto [targetWidth, targetHeight] = gfx::get_render_target_size();
+  gfx::Viewport fitted = viewport;
+  Vec4<float> fix{1.f, 0.f, 1.f, 0.f};
+  if (targetWidth != 0 && targetHeight != 0) {
+    const float right = std::min(viewport.left + viewport.width, static_cast<float>(targetWidth));
+    const float bottom = std::min(viewport.top + viewport.height, static_cast<float>(targetHeight));
+    fitted.left = std::clamp(viewport.left, 0.f, static_cast<float>(targetWidth));
+    fitted.top = std::clamp(viewport.top, 0.f, static_cast<float>(targetHeight));
+    fitted.width = std::max(right - fitted.left, 0.f);
+    fitted.height = std::max(bottom - fitted.top, 0.f);
+    // Pixel x = left + (ndc + 1) / 2 * width and y = top + (1 - ndc) / 2 * height, solved for the
+    // ndc that gives the same pixel in the fitted viewport. An empty fit shows nothing either way.
+    if (fitted.width > 0.f && fitted.width != viewport.width) {
+      fix.x() = viewport.width / fitted.width;
+      fix.y() = fix.x() - 1.f + 2.f * (viewport.left - fitted.left) / fitted.width;
+    }
+    if (fitted.height > 0.f && fitted.height != viewport.height) {
+      fix.z() = viewport.height / fitted.height;
+      fix.w() = 1.f - fix.z() - 2.f * (viewport.top - fitted.top) / fitted.height;
+    }
+  }
+  if (fix != g_gxState.viewportFix) {
+    g_gxState.viewportFix = fix;
+    g_gxState.dirty |= DirtyUniform;
+  }
+  return fitted;
+}
+
 void set_render_viewport(const gfx::Viewport& viewport) noexcept {
   if (viewport.left != g_gxState.renderViewport.left || viewport.width != g_gxState.renderViewport.width ||
       viewport.height != g_gxState.renderViewport.height) {
     g_gxState.dirty |= DirtyUniform;
   }
   g_gxState.renderViewport = viewport;
-  gfx::set_viewport(viewport);
+  gfx::set_viewport(fit_render_viewport(viewport));
 }
 
 void set_logical_scissor(const gfx::ClipRect& scissor) noexcept {
@@ -382,7 +411,10 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
     g_device.CreateRenderPipelineAsync(
         &descriptor, wgpu::CallbackMode::AllowSpontaneous,
         [cb = std::move(onAsync)](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
-                                  wgpu::StringView) {
+                                  wgpu::StringView message) {
+          if (status != wgpu::CreatePipelineAsyncStatus::Success) {
+            Log.error("Background pipeline compile failed ({}): {}", underlying(status), message);
+          }
           cb(status == wgpu::CreatePipelineAsyncStatus::Success ? std::move(pipeline) : wgpu::RenderPipeline{});
         });
     return {};

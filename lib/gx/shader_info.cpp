@@ -394,6 +394,9 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     }
   }
   auto proj = g_gxState.proj;
+  const auto& fix = g_gxState.viewportFix;
+  proj.m0 = proj.m0 * Vec4{fix.x(), fix.x(), fix.x(), fix.x()} + proj.m3 * Vec4{fix.y(), fix.y(), fix.y(), fix.y()};
+  proj.m1 = proj.m1 * Vec4{fix.z(), fix.z(), fix.z(), fix.z()} + proj.m3 * Vec4{fix.w(), fix.w(), fix.w(), fix.w()};
   if constexpr (UseReversedZ) {
     proj.m2 = proj.m2 * Vec4{-1.f, -1.f, -1.f, -1.f};
   } else {
