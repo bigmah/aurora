@@ -547,7 +547,22 @@ struct ShaderInfo {
   bool usesFog : 1 = false;
   bool lightingEnabled : 1 = false;
   u8 lineMode : 2 = 0;
+  // No per-vertex matrix indices: the uniform carries only the current position/normal matrix
+  // (postex_mtx[0], nrm_mtx[0]) and the texture matrices the texgens use (postex_mtx[1..]), not
+  // all 30 matrices. compactTexMtxSrc holds each one's index in matrix memory (tcg.mtx / 3).
+  bool compactMtx : 1 = false;
+  u8 compactTexMtxCount = 0;
+  std::array<u8, MaxTexCoord> compactTexMtxSrc{};
 };
+// postex_mtx slot of texture matrix `texMtxIdx` (tcg.mtx / 3) in a compact uniform.
+inline u32 compact_tex_mtx_slot(const ShaderInfo& info, u32 texMtxIdx) noexcept {
+  for (u32 i = 0; i < info.compactTexMtxCount; ++i) {
+    if (info.compactTexMtxSrc[i] == texMtxIdx) {
+      return 1 + i;
+    }
+  }
+  return 0;
+}
 struct BindGroupRanges {
   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
 };

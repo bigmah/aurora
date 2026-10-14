@@ -366,6 +366,35 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     info.uniformSize += MaxIndTexMtxs * sizeof(Mat2x4<float>);
   }
   info.uniformSize += info.sampledTextures.count() * sizeof(Vec4<float>);
+
+  // Compact matrices: most draws use one position matrix and a texture matrix or two, and a full
+  // set of 30 is ~1.4 KB of uniform data per draw.
+  bool compact = config.lineMode == 0 && config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE;
+  for (int i = 0; compact && i < info.sampledTexCoords.size(); ++i) {
+    if (!info.sampledTexCoords.test(i)) {
+      continue;
+    }
+    const auto& tcg = config.tcgs[i];
+    if ((tcg.type != GX_TG_MTX2x4 && tcg.type != GX_TG_MTX3x4) ||
+        tcg.mtx == GX_IDENTITY) {
+      continue;
+    }
+    if (config.attrs[GX_VA_TEX0MTXIDX + i].attrType != GX_NONE) {
+      compact = false;
+      break;
+    }
+    const u32 texMtxIdx = tcg.mtx / 3;
+    if (compact_tex_mtx_slot(info, texMtxIdx) == 0) {
+      info.compactTexMtxSrc[info.compactTexMtxCount++] = static_cast<u8>(texMtxIdx);
+    }
+  }
+  if (compact) {
+    info.compactMtx = true;
+    info.uniformSize -= sizeof(Mat3x4<float>) * 30;
+    info.uniformSize += sizeof(Mat3x4<float>) * (2 + info.compactTexMtxCount);
+  } else {
+    info.compactTexMtxCount = 0;
+  }
   info.uniformSize = gfx::align_uniform(info.uniformSize);
   if (info.uniformSize > MaxUniformSize) {
     Log.fatal("Uniform size exceeds maximum: {} > {}", info.uniformSize, MaxUniformSize);
@@ -404,16 +433,29 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
   }
   buf.append(proj);
 
-  for (int i = 0; i < MaxPnMtx; i++) {
-    buf.append(g_gxState.pnMtx[i].pos);
-  }
+  if (info.compactMtx) {
+    // Matrix memory: position matrices 0-9, then texture matrices 10-19.
+    const auto matrix = [](u32 idx) -> const Mat3x4<float>& {
+      return idx < MaxPnMtx ? g_gxState.pnMtx[idx].pos : g_gxState.texMtxs[std::min<u32>(idx - MaxPnMtx, MaxTexMtx - 1)];
+    };
+    const u32 current = g_gxState.currentPnMtx;
+    buf.append(matrix(current));
+    for (u32 i = 0; i < info.compactTexMtxCount; ++i) {
+      buf.append(matrix(info.compactTexMtxSrc[i]));
+    }
+    buf.append(g_gxState.pnMtx[std::min<u32>(current, MaxPnMtx - 1)].nrm);
+  } else {
+    for (int i = 0; i < MaxPnMtx; i++) {
+      buf.append(g_gxState.pnMtx[i].pos);
+    }
 
-  for (int i = 0; i < MaxTexMtx; i++) {
-    buf.append(g_gxState.texMtxs[i]);
-  }
+    for (int i = 0; i < MaxTexMtx; i++) {
+      buf.append(g_gxState.texMtxs[i]);
+    }
 
-  for (int i = 0; i < MaxPnMtx; i++) {
-    buf.append(g_gxState.pnMtx[i].nrm);
+    for (int i = 0; i < MaxPnMtx; i++) {
+      buf.append(g_gxState.pnMtx[i].nrm);
+    }
   }
 
   for (int i = 0; i < info.loadsTevReg.size(); ++i) {

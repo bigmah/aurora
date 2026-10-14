@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <list>
 #include <optional>
 #include <utility>
@@ -122,6 +123,13 @@ absl::flat_hash_map<TextureContentKey, ContentCacheEntry> s_contentCache;
 absl::flat_hash_map<SourceKeyCacheKey, SourceKeyCacheEntry> s_sourceKeyCache;
 absl::flat_hash_map<uint64_t, absl::flat_hash_set<u32>> s_replacementUsers;
 std::list<TextureContentKey> s_contentLru;
+// Object cache entries in the order they were created (frame, id), so the
+// per-frame sweep only looks at entries old enough to expire. Games that
+// re-init their GXTexObjs every frame create thousands of entries a second.
+std::deque<std::pair<uint64_t, u32>> s_textureObjectExpiry;
+std::deque<std::pair<uint64_t, u32>> s_tlutObjectExpiry;
+// TLUT caches holding dynamic palette textures (swept every frame: they're GPU textures).
+absl::flat_hash_set<u32> s_dynamicPaletteTluts;
 uint64_t s_contentCacheBytes = 0;
 uint64_t s_contentCacheBudgetBytes = texture::ContentCacheBudgetBytes;
 uint64_t s_frameCount = 0;
@@ -194,13 +202,25 @@ void clear_texture_dependency(u32 texObjId, const CachedTextureEntry& entry) {
   clear_texture_dependency(texObjId, entry.tlutObjId, entry.replacementId);
 }
 
+TlutObjectCache& tlut_object_cache(u32 tlutObjId) {
+  const auto [it, inserted] = s_tlutObjectCaches.try_emplace(tlutObjId);
+  if (inserted) {
+    s_tlutObjectExpiry.emplace_back(s_frameCount, tlutObjId);
+  }
+  return it->second;
+}
+
 void store_cached_texture(const GXTexObj_& obj, gfx::TextureHandle handle, u32 tlutObjId = 0, u32 tlutDataVersion = 0,
                           uint64_t replacementId = 0) {
   if (obj.texObjId == 0) {
     return;
   }
 
-  auto& entry = s_textureObjectCaches[obj.texObjId];
+  const auto [entryIt, inserted] = s_textureObjectCaches.try_emplace(obj.texObjId);
+  auto& entry = entryIt->second;
+  if (inserted) {
+    s_textureObjectExpiry.emplace_back(s_frameCount, obj.texObjId);
+  }
   if (entry.tlutObjId != tlutObjId || entry.replacementId != replacementId) {
     clear_texture_dependency(obj.texObjId, entry);
   }
@@ -213,7 +233,7 @@ void store_cached_texture(const GXTexObj_& obj, gfx::TextureHandle handle, u32 t
   entry.lastUsedFrame = s_frameCount;
 
   if (tlutObjId != 0) {
-    auto& cache = s_tlutObjectCaches[tlutObjId];
+    auto& cache = tlut_object_cache(tlutObjId);
     cache.staticTextureUsers.insert(obj.texObjId);
     cache.lastUsedFrame = s_frameCount;
   }
@@ -372,7 +392,7 @@ TextureKeys hash_texture_source(const GXTexObj_& obj, const GXTlutObj_* tlut, bo
 
 gfx::TextureHandle get_tlut_texture(const GXTlutObj_& tlut) {
   if (tlut.tlutObjId != 0) {
-    auto& cache = s_tlutObjectCaches[tlut.tlutObjId];
+    auto& cache = tlut_object_cache(tlut.tlutObjId);
     cache.lastUsedFrame = s_frameCount;
     if (cache.tlutTexture.handle && cache.tlutTexture.tlutDataVersion == tlut.tlutDataVersion) {
       return cache.tlutTexture.handle;
@@ -392,7 +412,7 @@ gfx::TextureHandle get_tlut_texture(const GXTlutObj_& tlut) {
   const auto handle = gfx::new_static_texture_2d(tlut.numEntries, 1, 1, gfx::tlut_texture_format(tlut.format),
                                                  {static_cast<const u8*>(tlut.data), sourceBytes}, true, "Loaded TLUT");
   if (tlut.tlutObjId != 0) {
-    auto& cache = s_tlutObjectCaches[tlut.tlutObjId];
+    auto& cache = tlut_object_cache(tlut.tlutObjId);
     cache.tlutTexture.handle = handle;
     cache.tlutTexture.tlutDataVersion = tlut.tlutDataVersion;
     cache.lastUsedFrame = s_frameCount;
@@ -405,8 +425,9 @@ gfx::TextureHandle resolve_dynamic_palette_texture(const GXTexObj_& obj, const G
   ZoneScoped;
 
   const auto tlutHandle = get_tlut_texture(tlut);
-  auto& tlutCache = s_tlutObjectCaches[tlut.tlutObjId];
+  auto& tlutCache = tlut_object_cache(tlut.tlutObjId);
   tlutCache.lastUsedFrame = s_frameCount;
+  s_dynamicPaletteTluts.insert(tlut.tlutObjId);
   auto& entry = tlutCache.dynamicPaletteTextures[make_dynamic_palette_key(obj, source)];
   entry.lastUsedFrame = s_frameCount;
   if (!entry.handle) {
@@ -470,30 +491,56 @@ void sweep_object_caches() {
     return s_frameCount > lastUsedFrame && s_frameCount - lastUsedFrame > texture::ObjectCacheIdleFrames;
   };
 
-  for (auto it = s_textureObjectCaches.begin(); it != s_textureObjectCaches.end();) {
+  // Entries still in use go to the back of the queue, to be checked again once
+  // they could have expired.
+  while (!s_textureObjectExpiry.empty() && expired(s_textureObjectExpiry.front().first)) {
+    const u32 texObjId = s_textureObjectExpiry.front().second;
+    s_textureObjectExpiry.pop_front();
+    const auto it = s_textureObjectCaches.find(texObjId);
+    if (it == s_textureObjectCaches.end()) {
+      continue;
+    }
     if (expired(it->second.lastUsedFrame)) {
-      const u32 texObjId = it->first;
       const CachedTextureEntry entry = it->second;
-      s_textureObjectCaches.erase(it++);
+      s_textureObjectCaches.erase(it);
       clear_texture_dependency(texObjId, entry);
     } else {
-      ++it;
+      s_textureObjectExpiry.emplace_back(it->second.lastUsedFrame, texObjId);
     }
   }
 
-  for (auto cacheIt = s_tlutObjectCaches.begin(); cacheIt != s_tlutObjectCaches.end();) {
-    auto& cache = cacheIt->second;
-    for (auto it = cache.dynamicPaletteTextures.begin(); it != cache.dynamicPaletteTextures.end();) {
-      if (expired(it->second.lastUsedFrame)) {
-        cache.dynamicPaletteTextures.erase(it++);
-      } else {
-        ++it;
+  for (auto tlutIt = s_dynamicPaletteTluts.begin(); tlutIt != s_dynamicPaletteTluts.end();) {
+    const auto cacheIt = s_tlutObjectCaches.find(*tlutIt);
+    if (cacheIt != s_tlutObjectCaches.end()) {
+      auto& textures = cacheIt->second.dynamicPaletteTextures;
+      for (auto it = textures.begin(); it != textures.end();) {
+        if (expired(it->second.lastUsedFrame)) {
+          textures.erase(it++);
+        } else {
+          ++it;
+        }
+      }
+      if (!textures.empty()) {
+        ++tlutIt;
+        continue;
       }
     }
+    s_dynamicPaletteTluts.erase(tlutIt++);
+  }
+
+  while (!s_tlutObjectExpiry.empty() && expired(s_tlutObjectExpiry.front().first)) {
+    const u32 tlutObjId = s_tlutObjectExpiry.front().second;
+    s_tlutObjectExpiry.pop_front();
+    const auto cacheIt = s_tlutObjectCaches.find(tlutObjId);
+    if (cacheIt == s_tlutObjectCaches.end()) {
+      continue;
+    }
+    auto& cache = cacheIt->second;
     if (expired(cache.lastUsedFrame) && cache.staticTextureUsers.empty() && cache.dynamicPaletteTextures.empty()) {
-      s_tlutObjectCaches.erase(cacheIt++);
+      s_tlutObjectCaches.erase(cacheIt);
     } else {
-      ++cacheIt;
+      // Kept (recently used, or still has users): look again later.
+      s_tlutObjectExpiry.emplace_back(expired(cache.lastUsedFrame) ? s_frameCount : cache.lastUsedFrame, tlutObjId);
     }
   }
 }
@@ -727,6 +774,9 @@ void end_frame() noexcept {
 void shutdown() noexcept {
   s_textureObjectCaches.clear();
   s_tlutObjectCaches.clear();
+  s_textureObjectExpiry.clear();
+  s_tlutObjectExpiry.clear();
+  s_dynamicPaletteTluts.clear();
   s_replacementUsers.clear();
   s_contentCache.clear();
   s_contentLru.clear();

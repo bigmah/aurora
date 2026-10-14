@@ -109,26 +109,40 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
     return;
   }
   const auto& resources = gfx::detail::resources();
+  auto& bound = gfx::g_gxPassBindState;
 #ifdef AURORA_IMMEDIATES_AS_UNIFORM
   const std::array offsets{data.uniformRange.offset, data.immediateRange.offset};
 #else
   pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
   const std::array offsets{data.uniformRange.offset};
 #endif
-  pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());
-  if (data.bindGroups.textureBindGroup) {
-    pass.SetBindGroup(2, gfx::find_bind_group(data.bindGroups.textureBindGroup));
+  if (!bound.uniformBound || !std::equal(offsets.begin(), offsets.end(), bound.uniformOffsets.begin())) {
+    pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());
+    bound.uniformBound = true;
+    std::copy(offsets.begin(), offsets.end(), bound.uniformOffsets.begin());
   }
-  pass.SetIndexBuffer(resources.indexBuffer, wgpu::IndexFormat::Uint16, data.idxRange.offset, data.idxRange.size);
-  if (data.dstAlpha != UINT32_MAX) {
+  if (data.bindGroups.textureBindGroup) {
+    const auto bindGroup = gfx::find_bind_group(data.bindGroups.textureBindGroup);
+    if (bindGroup.Get() != bound.textureBindGroup) {
+      pass.SetBindGroup(2, bindGroup);
+      bound.textureBindGroup = bindGroup.Get();
+    }
+  }
+  // The whole index buffer stays bound; draws start at their range.
+  if (data.indexCount != 0 && !bound.indexBufferBound) {
+    pass.SetIndexBuffer(resources.indexBuffer, wgpu::IndexFormat::Uint16);
+    bound.indexBufferBound = true;
+  }
+  if (data.dstAlpha != UINT32_MAX && data.dstAlpha != bound.dstAlpha) {
     const wgpu::Color color{0.f, 0.f, 0.f, data.dstAlpha / 255.f};
     pass.SetBlendConstant(&color);
+    bound.dstAlpha = data.dstAlpha;
   }
   const auto draw = [&] {
     if (data.indexCount == 0) {
       pass.Draw(data.vtxCount, data.instanceCount);
     } else {
-      pass.DrawIndexed(data.indexCount, data.instanceCount);
+      pass.DrawIndexed(data.indexCount, data.instanceCount, data.idxRange.offset / sizeof(uint16_t));
     }
   };
   if (pipeline.prepass) {

@@ -1312,6 +1312,15 @@ PipelineRef find_pipeline(const clear::PipelineConfig& config, const RenderTarge
 }
 
 PipelineRef find_pipeline(const gx::PipelineConfig& config, const RenderTargetLayout& layout) {
+  // Fast path for pipelines already built and remembered: hash the config once.
+  const auto configKey = xxh3_hash(config, static_cast<HashType>(ShaderType::GX));
+  const auto runtimeKey = xxh3_hash(layout.key, configKey);
+  {
+    std::lock_guard lock{g_pipelineMutex};
+    if (g_pipelines.contains(runtimeKey) && g_knownPipelines.contains(configKey)) {
+      return runtimeKey;
+    }
+  }
   remember_pipeline_config(ShaderType::GX, config, current_frame(), true);
   return resolve_pipeline(ShaderType::GX, config, layout, PipelinePriority::Normal);
 }

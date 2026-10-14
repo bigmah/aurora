@@ -47,6 +47,11 @@ namespace aurora::dvd::impl {
   std::mutex s_fstLock;
 }
 
+#ifdef __EMSCRIPTEN__
+// The web build's GCM reader (the port's, in place of nod).
+extern "C" int64_t nod_web_file_disc_offset(const NodHandle* handle);
+#endif
+
 namespace {
 
 class CommandDataBase {
@@ -54,6 +59,8 @@ public:
   virtual ~CommandDataBase() = default;
   virtual int64_t read(uint8_t *buf, size_t len) = 0;
   virtual int64_t seek(int64_t offset, int32_t whence) = 0;
+  // Where the file starts in the disc image, when it's a plain range of it (-1 otherwise).
+  virtual int64_t disc_offset() const { return -1; }
 };
 
 class CommandDataNod final : public CommandDataBase {
@@ -71,6 +78,10 @@ public:
   int64_t seek(int64_t offset, int32_t whence) override {
     return nod_seek(handle, offset, whence);
   }
+
+#ifdef __EMSCRIPTEN__
+  int64_t disc_offset() const override { return nod_web_file_disc_offset(handle); }
+#endif
 };
 
 class CommandDataOverlay final : public CommandDataBase {
@@ -958,6 +969,15 @@ s32 DVDInquiry(DVDCommandBlock* block, DVDDriveInfo* info) {
 void DVDReset(void) {}
 
 int DVDResetRequired(void) { return FALSE; }
+
+// Disc image offset of an open file's first byte, or -1 (web builds: lets the page fetch a read's
+// bytes before it's issued).
+extern "C" int64_t aurora_dvd_file_disc_offset(const DVDFileInfo* fileInfo) {
+  if (fileInfo == nullptr || fileInfo->cb.userData == nullptr) {
+    return -1;
+  }
+  return static_cast<const CommandDataBase*>(fileInfo->cb.userData)->disc_offset();
+}
 
 s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) {
   if (block == nullptr) {

@@ -353,6 +353,9 @@ void encode_draw(void* payload, const wgpu::RenderPassEncoder& pass, const Rende
     static_assert(std::is_invocable_v<decltype(Renderer), const T&, const wgpu::RenderPassEncoder&>);
     Renderer(data, pass);
   }
+  if constexpr (!std::is_same_v<T, gx::DrawData>) {
+    g_gxPassBindState = {}; // it may have bound anything
+  }
 }
 
 template <auto Renderer, InlinePayload T>
@@ -937,7 +940,23 @@ bool has_normal_attachment() noexcept {
 
 RenderTargetLayout get_render_target_layout() noexcept {
   CHECK(g_recorder.currentRenderPass != UINT32_MAX, "get_render_target_layout called outside of a frame");
-  return current_render_passes()[g_recorder.currentRenderPass].target_layout();
+  // Called for every draw: reuse the last layout's hash when what it hashes is unchanged.
+  const auto& pass = current_render_passes()[g_recorder.currentRenderPass];
+  static RenderTargetLayout s_last{};
+  static bool s_hasLast = false;
+  const auto depthFormat = pass.hasDepth || pass.hasStencil ? pass.depthStencilFormat : wgpu::TextureFormat::Undefined;
+  bool same = s_hasLast && s_last.colorAttachmentCount == pass.colorAttachmentCount &&
+              s_last.depthStencilFormat == depthFormat && s_last.sampleCount == pass.msaaSamples;
+  for (uint32_t i = 0; same && i < pass.colorAttachmentCount; ++i) {
+    const auto& a = s_last.colorAttachments[i];
+    const auto& b = pass.colorAttachments[i];
+    same = a.semantic == b.semantic && a.format == b.format && a.width == b.size.width && a.height == b.size.height;
+  }
+  if (!same) {
+    s_last = pass.target_layout();
+    s_hasLast = true;
+  }
+  return s_last;
 }
 
 void clear_caches() noexcept {

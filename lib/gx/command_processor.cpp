@@ -1,3 +1,4 @@
+#include <cstring>
 #include "command_processor.hpp"
 
 #include "../gfx/depth_peek.hpp"
@@ -137,6 +138,7 @@ struct DrawCache {
   u8 lineMode = 0;
   bool hasPipeline = false;
   gfx::Range uniformRange{};
+  u32 uniformPnMtx = 0;
   gfx::Range fogRange{};
   FogRangeLutKey fogRangeKey{};
   bool hasFogRange = false;
@@ -405,7 +407,20 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
   const auto targetLayoutKey = gfx::get_render_target_layout().key;
   const bool pipelineValid = cache.hasPipeline && (state.dirty & DirtyPipeline) == 0 && cache.fmt == fmt &&
                              cache.lineMode == lineMode && cache.targetLayoutKey == targetLayoutKey;
-  if (!pipelineValid) {
+  // Games re-set state that often ends up the same: compare before hashing and looking up a pipeline.
+  static PipelineConfig s_nextConfig;
+  bool sameConfig = false;
+  if (!pipelineValid && cache.hasPipeline && cache.targetLayoutKey == targetLayoutKey) {
+    s_nextConfig = cache.config;
+    populate_pipeline_config(s_nextConfig, prim, fmt);
+    sameConfig = std::memcmp(&s_nextConfig, &cache.config, sizeof(PipelineConfig)) == 0;
+    if (sameConfig) {
+      cache.fmt = fmt;
+      cache.lineMode = lineMode;
+      state.dirty &= ~DirtyPipeline;
+    }
+  }
+  if (!pipelineValid && !sameConfig) {
     const bool hadPipeline = cache.hasPipeline;
     const auto prevSampledTextures = cache.shaderInfo.sampledTextures;
     const auto prevSampledIndTextures = cache.shaderInfo.sampledIndTextures;
@@ -437,9 +452,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     }
   }
 
-  const bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
+  // A compact uniform holds the current matrix itself.
+  const bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0 &&
+                            (!cache.shaderInfo.compactMtx || cache.uniformPnMtx == state.currentPnMtx);
   if (!uniformValid) {
     cache.uniformRange = build_uniform(cache.shaderInfo);
+    cache.uniformPnMtx = state.currentPnMtx;
     state.dirty &= ~DirtyUniform;
   }
   if (cache.config.shaderConfig.fogRangeEnabled) {

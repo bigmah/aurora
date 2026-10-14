@@ -994,6 +994,8 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
           attr_load(config, GX_VA_PNMTXIDX, "vidx_b"sv));
     }
     vidxAttr = "in_vidx"sv;
+  } else if (info.compactMtx) {
+    vtxXfrAttrsPre += "\n    let in_pnmtxidx = 0u;";
   } else if (config.attrs[GX_VA_PNMTXIDX].attrType == GX_NONE) {
     vtxXfrAttrsPre += "\n    let in_pnmtxidx = imm.current_pnmtx;";
   }
@@ -1076,8 +1078,13 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   }
 
   uniBufAttrs += "\n    proj: mat4x4f,";
-  uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,", MaxPnMtx + MaxTexMtx);
-  uniBufAttrs += fmt::format("\n    nrm_mtx: array<mat3x4f, {}>,", MaxPnMtx);
+  if (info.compactMtx) {
+    uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,", 1 + info.compactTexMtxCount);
+    uniBufAttrs += "\n    nrm_mtx: array<mat3x4f, 1>,";
+  } else {
+    uniBufAttrs += fmt::format("\n    postex_mtx: array<mat3x4f, {}>,", MaxPnMtx + MaxTexMtx);
+    uniBufAttrs += fmt::format("\n    nrm_mtx: array<mat3x4f, {}>,", MaxPnMtx);
+  }
   std::string fragmentFnPre;
   std::string fragmentFn;
 
@@ -1264,6 +1271,9 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
         vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0}.xyz;", i);
       } else {
         u32 texMtxIdx = (tcg.mtx) / 3;
+        if (info.compactMtx) {
+          texMtxIdx = compact_tex_mtx_slot(info, texMtxIdx);
+        }
         vtxXfrAttrs += fmt::format("\n    var tc{0}_tmp = tc{0} * ubuf.postex_mtx[{1}];", i, texMtxIdx);
       }
       if (tcg.type == GX_TG_MTX2x4) {
