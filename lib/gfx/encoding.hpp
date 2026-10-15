@@ -12,7 +12,7 @@ void bind_pipeline(const wgpu::RenderPipeline& pipeline, const wgpu::RenderPassE
 // kind of draw.
 struct GXPassBindState {
   bool uniformBound = false;
-  std::array<uint32_t, 2> uniformOffsets{};
+  std::array<uint32_t, 3> uniformOffsets{};
   WGPUBindGroup textureBindGroup = nullptr;
   bool indexBufferBound = false;
   uint32_t dstAlpha = UINT32_MAX;

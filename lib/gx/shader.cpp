@@ -856,7 +856,7 @@ auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 
       var lighting = {5};
       for (var i = 0u; i < {1}u; i++) {{
           if ((ubuf.lightState{0}{9} & (1u << i)) == 0u) {{ continue; }}
-          var light = ubuf.lights[i];
+          var light = lbuf.lights[i];
           var ldir = light.pos - {6};
           var dist2 = dot(ldir, ldir);
           var dist = sqrt(dist2);
@@ -1165,21 +1165,26 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
 
   if (info.lightingEnabled) {
     uniBufAttrs += fmt::format(FMT_STRING(R"""(
-    lights: array<Light, {}>,
     lightState0: u32,
     lightState1: u32,
     lightState0a: u32,
-    lightState1a: u32,)"""),
-                               GX::MaxLights);
-    uniformPre +=
+    lightState1a: u32,)"""));
+    // The lights have their own binding: they rarely change, so draws share one copy.
+    uniformPre += fmt::format(
         "\n"
-        "struct Light {\n"
+        "struct Light {{\n"
         "    pos: vec3f,\n"
         "    dir: vec3f,\n"
         "    color: vec4f,\n"
         "    cos_att: vec3f,\n"
         "    dist_att: vec3f,\n"
-        "};";
+        "}};\n"
+        "struct Lights {{\n"
+        "    lights: array<Light, {}>,\n"
+        "}};\n"
+        "@group(1) @binding(2)\n"
+        "var<uniform> lbuf: Lights;",
+        GX::MaxLights);
     if (UsePerPixelLighting) {
       vtxOutAttrs += fmt::format("\n    @location({}) mv_pos: vec3f,", vtxOutIdx++);
       vtxOutAttrs += fmt::format("\n    @location({}) mv_nrm: vec3f,", vtxOutIdx++);
@@ -1248,7 +1253,7 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
       // Emboss bump: offset the source texcoord by the light projected onto tangent/binormal
       const u32 lightIdx = tcg.type - GX_TG_BUMP0;
       vtxXfrAttrs += fmt::format(
-          "\n    let bump_ldir{0} = normalize(ubuf.lights[{1}].pos - mv_pos);"
+          "\n    let bump_ldir{0} = normalize(lbuf.lights[{1}].pos - mv_pos);"
           "\n    let bump_tan{0} = vec4f(in_tangent, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
           "\n    let bump_bin{0} = vec4f(in_binrm, 0.0) * ubuf.nrm_mtx[in_pnmtxidx];"
           "\n    out.tex{0}_uv = tc{2}_proj.xy + vec2f(dot(bump_ldir{0}, bump_tan{0}), dot(bump_ldir{0}, "

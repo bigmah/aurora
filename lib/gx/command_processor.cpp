@@ -140,6 +140,9 @@ struct DrawCache {
   bool hasPipeline = false;
   gfx::Range uniformRange{};
   u32 uniformPnMtx = 0;
+  decltype(GXState::lights) lights{};
+  gfx::Range lightRange{};
+  u32 lightFrame = UINT32_MAX;
   DrawImmediateData immediates{};
   gfx::Range immediateRange{};
   u32 immediateFrame = UINT32_MAX;
@@ -464,6 +467,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     cache.uniformPnMtx = state.currentPnMtx;
     state.dirty &= ~DirtyUniform;
   }
+  // Lights: shared by draws until they change.
+  if (cache.shaderInfo.lightingEnabled &&
+      (cache.lightFrame != gfx::current_frame() || cache.lightRange.size == 0 ||
+       std::memcmp(&cache.lights, &state.lights, sizeof(state.lights)) != 0)) {
+    cache.lights = state.lights;
+    cache.lightRange = build_lights();
+    cache.lightFrame = gfx::current_frame();
+  }
   if (cache.config.shaderConfig.fogRangeEnabled) {
     const auto key = fog_range_lut_key();
     if (!cache.hasFogRange || cache.fogRangeKey != key) {
@@ -509,6 +520,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       .vertRange = vertRange,
       .idxRange = idxRange,
       .uniformRange = cache.uniformRange,
+      .lightOffset = cache.lightFrame == gfx::current_frame() ? cache.lightRange.offset : 0,
       .immediateData = immediates,
 #ifdef AURORA_IMMEDIATES_AS_UNIFORM
       .immediateRange = immediateRange,

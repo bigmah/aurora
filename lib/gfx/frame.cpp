@@ -543,6 +543,17 @@ void initialize() {
                 },
         },
 #endif
+        // GX lights
+        wgpu::BindGroupLayoutEntry{
+            .binding = 2,
+            .visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment,
+            .buffer =
+                wgpu::BufferBindingLayout{
+                    .type = wgpu::BufferBindingType::Uniform,
+                    .hasDynamicOffset = true,
+                    .minBindingSize = gx::LightsUniformSize,
+                },
+        },
     };
     const wgpu::BindGroupLayoutDescriptor layoutDesc{
         .label = "Uniform bind group layout",
@@ -563,6 +574,11 @@ void initialize() {
             .size = sizeof(gx::DrawImmediateData),
         },
 #endif
+        wgpu::BindGroupEntry{
+            .binding = 2,
+            .buffer = g_resources.uniformBuffer,
+            .size = gx::LightsUniformSize,
+        },
     };
     const wgpu::BindGroupDescriptor bindGroupDescriptor{
         .label = "Uniform bind group",

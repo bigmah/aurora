@@ -111,10 +111,10 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
   const auto& resources = gfx::detail::resources();
   auto& bound = gfx::g_gxPassBindState;
 #ifdef AURORA_IMMEDIATES_AS_UNIFORM
-  const std::array offsets{data.uniformRange.offset, data.immediateRange.offset};
+  const std::array offsets{data.uniformRange.offset, data.immediateRange.offset, data.lightOffset};
 #else
   pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
-  const std::array offsets{data.uniformRange.offset};
+  const std::array offsets{data.uniformRange.offset, data.lightOffset};
 #endif
   if (!bound.uniformBound || !std::equal(offsets.begin(), offsets.end(), bound.uniformOffsets.begin())) {
     pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());

@@ -322,8 +322,8 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     }
   }
   if (info.lightingEnabled) {
-    // Lights + light state for all channels
-    info.uniformSize += 16 + sizeof(Light) * GX::MaxLights;
+    // Light state for all channels (the lights themselves: build_lights)
+    info.uniformSize += 16;
   }
   for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
     if (info.sampledColorChannels.test(i)) {
@@ -464,9 +464,6 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     }
   }
   if (info.lightingEnabled) {
-    // Lights
-    static_assert(sizeof(g_gxState.lights) == 80 * GX::MaxLights);
-    buf.append(g_gxState.lights);
     // Light state for all channels
     for (int i = 0; i < 4; ++i) {
       buf.append<u32>(g_gxState.colorChannelState[i].lightMask.to_ulong());
@@ -539,6 +536,11 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
     }
     buf.append(texture_size_bias(get_texture(static_cast<GXTexMapID>(i))));
   }
+}
+
+gfx::Range build_lights() noexcept {
+  static_assert(sizeof(g_gxState.lights) == LightsUniformSize);
+  return gfx::push_uniform(reinterpret_cast<const u8*>(&g_gxState.lights), sizeof(g_gxState.lights));
 }
 
 gfx::Range build_uniform(const ShaderInfo& info) noexcept {

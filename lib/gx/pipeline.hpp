@@ -10,6 +10,7 @@ struct DrawData {
   gfx::Range vertRange;
   gfx::Range idxRange;
   gfx::Range uniformRange;
+  uint32_t lightOffset; // uniform binding 2 (any valid offset when the shader has no lighting)
   DrawImmediateData immediateData;
 #ifdef AURORA_IMMEDIATES_AS_UNIFORM
   gfx::Range immediateRange;

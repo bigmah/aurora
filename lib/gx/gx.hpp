@@ -68,6 +68,7 @@ constexpr u32 MaxVtxFmt = GX_MAX_VTXFMT;
 constexpr u32 MaxPnMtx = (GX_PNMTX9 / 3) + 1;
 constexpr u32 MaxIndexAttr = 12; // VA_POS -> VA_TEX7
 constexpr u32 MaxUniformSize = 3840;
+constexpr u32 LightsUniformSize = 80 * 8; // std::array<Light, MaxLights>
 constexpr u32 XfRegCount = 0x58; // 0x1000-0x1057
 
 enum DirtyFlag : u8 {
