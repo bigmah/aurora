@@ -89,7 +89,7 @@ struct DrawImmediateData {
   u32 vtxStart = 0;
   u32 currentPnMtx = 0;
   u32 fogRangeBase = 0;
-  u32 _pad = 0;
+  u32 alphaMin = 0; // DynamicAlphaRef shaders discard alpha (0-255) below this
   std::array<u32, MaxIndexAttr> arrayStart{};
 };
 static_assert(std::has_unique_object_representations_v<DrawImmediateData>);
@@ -224,6 +224,10 @@ struct TevSwap {
   explicit operator bool() const { return !(*this == TevSwap{}); }
 };
 static_assert(std::has_unique_object_representations_v<TevSwap>);
+// AlphaCompare.ref0 of a blended draw whose test is "alpha >= n" or none (comp0 GX_GEQUAL): n is in
+// the draw's immediates (alphaMin), so both share a pipeline. Games leave the test on from earlier
+// draws, which otherwise doubles the pipelines unpredictably (each one a hitch on WebKit).
+constexpr u32 DynamicAlphaRef = 0x100;
 struct AlphaCompare {
   GXCompare comp0 = GX_ALWAYS;
   u32 ref0; // would be u8 but extended to avoid padding bytes
@@ -568,6 +572,8 @@ struct BindGroupRanges {
   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
 };
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept;
+// The current state's alpha test as a DynamicAlphaRef threshold, or UINT32_MAX when it's part of the shader.
+u32 dynamic_alpha_min() noexcept;
 // With onAsync set, the pipeline is compiled in the background (createRenderPipelineAsync) and handed to
 // onAsync (null on failure); build_pipeline then returns null.
 using AsyncPipelineCallback = std::function<void(wgpu::RenderPipeline)>;

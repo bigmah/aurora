@@ -484,6 +484,8 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
     }
   }
   immediates.fogRangeBase = cache.fogRange.offset / sizeof(u32);
+  immediates.alphaMin =
+      cache.config.shaderConfig.alphaCompare.ref0 == DynamicAlphaRef ? dynamic_alpha_min() : 0;
 
   state.dirty &= ~DirtyImmediates;
 

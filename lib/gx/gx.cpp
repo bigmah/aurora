@@ -615,6 +615,32 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
       .alphaUpdate = alphaUpdate,
       .colorUpdate = g_gxState.colorUpdate,
   };
+  if (dynamic_alpha_min() != UINT32_MAX) {
+    config.shaderConfig.alphaCompare = {.comp0 = GX_GEQUAL, .ref0 = DynamicAlphaRef, .comp1 = GX_ALWAYS};
+  }
+}
+
+u32 dynamic_alpha_min() noexcept {
+  if (g_gxState.blendMode != GX_BM_BLEND) {
+    return UINT32_MAX;
+  }
+  const auto& ac = g_gxState.alphaCompare;
+  if (!ac) {
+    return 0;
+  }
+  if (ac.comp1 != GX_ALWAYS || ac.op != GX_AOP_AND) {
+    return UINT32_MAX;
+  }
+  switch (ac.comp0) {
+  case GX_ALWAYS:
+    return 0;
+  case GX_GEQUAL:
+    return ac.ref0 & 0xFF;
+  case GX_GREATER:
+    return (ac.ref0 & 0xFF) + 1;
+  default:
+    return UINT32_MAX;
+  }
 }
 
 GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {

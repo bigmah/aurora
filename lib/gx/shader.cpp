@@ -1734,7 +1734,11 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   } else if (!prevAlphaNormalized) {
     fragmentFn += "\n    prev.a = tev_overflow_f32(prev.a);";
   }
-  if (config.alphaCompare) {
+  if (config.alphaCompare.ref0 == DynamicAlphaRef) {
+    fragmentFn +=
+        "\n    // Alpha compare (threshold per draw)"
+        "\n    if (u32(round(clamp(prev.a, 0.0, 1.0) * 255.0)) < imm.alpha_min) { discard; }";
+  } else if (config.alphaCompare) {
     const auto comp0 = alpha_compare(config.alphaCompare.comp0, config.alphaCompare.ref0);
     const auto comp1 = alpha_compare(config.alphaCompare.comp1, config.alphaCompare.ref1);
     AlphaCompareExpr pass;
@@ -2139,7 +2143,7 @@ struct Immediate {{
     vtx_start: u32,
     current_pnmtx: u32,
     fog_range_base: u32,
-    _pad: u32,
+    alpha_min: u32,
     array_start0: vec4u,
     array_start1: vec4u,
     array_start2: vec4u,
