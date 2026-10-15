@@ -679,16 +679,16 @@ auto attr_address(const AttrConfig& mapping, GXAttr attr, std::string_view vidx,
     -> AttrAddress {
   const u32 dlOffset = mapping.offset + dlExtra;
   if (mapping.attrType == GX_INDEX8) {
-    return {fmt::format("{} + raw_fetch_u8_1(&vbuf, imm.vtx_start + {} * {}u + {}u) * {}u + {}u", imm_array_start(attr),
+    return {fmt::format("{} + raw_fetch_u8_1(&vbuf, vtx_start + {} * {}u + {}u) * {}u + {}u", imm_array_start(attr),
                         vidx, vtxStride, dlOffset, mapping.stride, within),
             "abuf"sv, mapping.le};
   }
   if (mapping.attrType == GX_INDEX16) {
-    return {fmt::format("{} + raw_fetch_u16_1(&vbuf, imm.vtx_start + {} * {}u + {}u, false) * {}u + {}u",
+    return {fmt::format("{} + raw_fetch_u16_1(&vbuf, vtx_start + {} * {}u + {}u, false) * {}u + {}u",
                         imm_array_start(attr), vidx, vtxStride, dlOffset, mapping.stride, within),
             "abuf"sv, mapping.le};
   }
-  return {fmt::format("imm.vtx_start + {} * {}u + {}u", vidx, vtxStride, dlOffset + within), "vbuf"sv, false};
+  return {fmt::format("vtx_start + {} * {}u + {}u", vidx, vtxStride, dlOffset + within), "vbuf"sv, false};
 }
 
 auto attr_load(const ShaderConfig& config, GXAttr attr, std::string_view vidx) -> std::string {
@@ -955,6 +955,19 @@ std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlph
   std::string vtxXfrAttrsPre;
   std::string vtxXfrAttrs;
   size_t vtxOutIdx = 0;
+
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+  // Without immediates, where a draw's vertices start comes in as its first
+  // instance (draws only use instances for line/point expansion), so the
+  // immediates uniform stays the same across draws.
+  if (config.lineMode == 0) {
+    vtxInAttrs += ",\n    @builtin(instance_index) vtx_start: u32";
+  } else {
+    vtxXfrAttrsPre += "\n    let vtx_start = imm.vtx_start;";
+  }
+#else
+  vtxXfrAttrsPre += "\n    let vtx_start = imm.vtx_start;";
+#endif
 
   // Load points for line/point expansion
   std::string_view vidxAttr = "vidx"sv;

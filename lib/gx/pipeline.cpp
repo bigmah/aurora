@@ -140,9 +140,10 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
   }
   const auto draw = [&] {
     if (data.indexCount == 0) {
-      pass.Draw(data.vtxCount, data.instanceCount);
+      pass.Draw(data.vtxCount, data.instanceCount, 0, data.firstInstance);
     } else {
-      pass.DrawIndexed(data.indexCount, data.instanceCount, data.idxRange.offset / sizeof(uint16_t));
+      pass.DrawIndexed(data.indexCount, data.instanceCount, data.idxRange.offset / sizeof(uint16_t), 0,
+                       data.firstInstance);
     }
   };
   if (pipeline.prepass) {

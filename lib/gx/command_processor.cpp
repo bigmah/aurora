@@ -2,6 +2,7 @@
 #include "command_processor.hpp"
 
 #include "../gfx/depth_peek.hpp"
+#include "../gfx/frame.hpp"
 #include "../gfx/recording.hpp"
 #include "../internal.hpp"
 #include "dolphin/gd/GDGeometry.h"
@@ -139,6 +140,9 @@ struct DrawCache {
   bool hasPipeline = false;
   gfx::Range uniformRange{};
   u32 uniformPnMtx = 0;
+  DrawImmediateData immediates{};
+  gfx::Range immediateRange{};
+  u32 immediateFrame = UINT32_MAX;
   gfx::Range fogRange{};
   FogRangeLutKey fogRangeKey{};
   bool hasFogRange = false;
@@ -472,6 +476,24 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
 
   state.dirty &= ~DirtyImmediates;
 
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+  // Shaders without line expansion take the vertex start from the first instance: the same
+  // immediates (array offsets) then serve many draws.
+  if (lineMode == 0) {
+    immediates.vtxStart = 0;
+  }
+  gfx::Range immediateRange;
+  if (cache.immediateFrame == gfx::current_frame() && cache.immediateRange.size != 0 &&
+      std::memcmp(&cache.immediates, &immediates, sizeof(immediates)) == 0) {
+    immediateRange = cache.immediateRange;
+  } else {
+    immediateRange = gfx::push_uniform(immediates);
+    cache.immediates = immediates;
+    cache.immediateRange = immediateRange;
+    cache.immediateFrame = gfx::current_frame();
+  }
+#endif
+
   uint32_t instanceCount = 1;
   if (prim == GX_LINES) {
     instanceCount = vtxCount / 2;
@@ -489,12 +511,15 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
       .uniformRange = cache.uniformRange,
       .immediateData = immediates,
 #ifdef AURORA_IMMEDIATES_AS_UNIFORM
-      .immediateRange = gfx::push_uniform(immediates),
+      .immediateRange = immediateRange,
 #endif
       .vtxCount = vtxCount,
       .indexCount = numIndices,
       .instanceCount = instanceCount,
       .dstAlpha = state.dstAlpha,
+#ifdef AURORA_IMMEDIATES_AS_UNIFORM
+      .firstInstance = lineMode == 0 ? vertRange.offset : 0,
+#endif
   });
 }
 

@@ -18,6 +18,7 @@ struct DrawData {
   uint32_t indexCount;
   uint32_t instanceCount;
   uint32_t dstAlpha;
+  uint32_t firstInstance = 0; // AURORA_IMMEDIATES_AS_UNIFORM: the vertex start (see build_shader_source)
 };
 
 constexpr uint32_t GXPipelineConfigVersion = 13;
