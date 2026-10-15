@@ -1465,7 +1465,12 @@ void set_pipeline_prewarm(int perFrame) {
 
 size_t background_pipelines_left() {
   std::lock_guard guard{g_pipelineMutex};
+#ifdef __EMSCRIPTEN__
+  // Still compiling counts too: the app may wait for the known pipelines to be done.
+  return g_backgroundPipelineQueue.size() + g_asyncInFlight.size();
+#else
   return g_backgroundPipelineQueue.size();
+#endif
 }
 
 void begin_pipeline_frame() {
