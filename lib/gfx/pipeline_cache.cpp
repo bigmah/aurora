@@ -1206,6 +1206,13 @@ static size_t web_load_pipeline_file(const std::string& path) {
 }
 
 static size_t web_load_pipeline_files() {
+  // AURORA_PIPELINE_PREWARM=0: build pipelines only when a draw needs them. On WebKit every
+  // compile holds up presenting (~60 ms on a phone with a cold shader cache), so prewarming
+  // hundreds costs a minute of low frame rates; one hitch when an effect first shows is less.
+  if (const char* env = getenv("AURORA_PIPELINE_PREWARM"); env != nullptr && env[0] == '0') {
+    Log.info("Pipeline prewarm off (AURORA_PIPELINE_PREWARM=0)");
+    return 0;
+  }
   size_t count = web_load_pipeline_file(web_pipeline_path(g_config.resourcesPath, InitialWebPipelineFileName));
   count += web_load_pipeline_file(web_pipeline_path(g_config.userPath, WebPipelineFileName));
   return count;
