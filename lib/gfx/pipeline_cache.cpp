@@ -29,6 +29,10 @@
 #include <thread>
 
 #include <SDL3/SDL_iostream.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+#include <cstdlib>
 #include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <fmt/format.h>
@@ -1209,7 +1213,21 @@ static size_t web_load_pipeline_files() {
 
 // Starts background compiles of queued pipelines (at most MaxAsyncPipelinesPerFrame per frame).
 static void pump_async_pipelines() {
-  for (size_t started = 0; started < MaxAsyncPipelinesPerFrame;) {
+  // AURORA_PIPELINES_PER_FRAME (the page sets 1 for WebKit, whose compiles hold up presenting
+  // even when asynchronous): at most that many background compiles per frame, and none right
+  // after a late frame, so the compiles spread out instead of stacking up into stalls.
+  static const size_t s_perFrame = [] {
+    const char* env = getenv("AURORA_PIPELINES_PER_FRAME");
+    return env != nullptr && atoi(env) > 0 ? static_cast<size_t>(atoi(env)) : MaxAsyncPipelinesPerFrame;
+  }();
+  static double s_lastPump = 0;
+  const double now = emscripten_get_now();
+  const bool late = s_lastPump != 0 && now - s_lastPump > 25.0;
+  s_lastPump = now;
+  if (late && s_perFrame < MaxAsyncPipelinesPerFrame) {
+    return;
+  }
+  for (size_t started = 0; started < s_perFrame;) {
     PendingPipeline pending;
     bool alreadyBuilt = false;
     {

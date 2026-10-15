@@ -1,3 +1,4 @@
+#include <cctype>
 #include "../gfx/hash.hpp"
 #include "../gfx/types.hpp"
 
@@ -872,6 +873,99 @@ auto lighting_func(const ShaderConfig& config, const ColorChannelConfig& cc, u8 
 }
 
 absl::flat_hash_set<gfx::ShaderRef> s_seenShaders;
+
+bool is_ident_char(char c) noexcept { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+// Drops the helper functions (vertex fetch, byte swaps, ...) a shader never calls. Every shader
+// carries all of them otherwise, and compile time grows with the source (WebKit compiles each
+// pipeline's shader separately, ~60 ms apiece the first time on a Mac).
+std::string strip_unused_functions(const std::string& src) {
+  struct Fn {
+    std::string name;
+    size_t begin, end; // [begin, end) of "fn ... }" plus its newline
+    bool entry;
+  };
+  std::vector<Fn> fns;
+  size_t pos = 0;
+  while ((pos = src.find("fn ", pos)) != std::string::npos) {
+    if (pos != 0 && src[pos - 1] != '\n') {
+      pos += 3;
+      continue;
+    }
+    size_t nameEnd = pos + 3;
+    while (nameEnd < src.size() && is_ident_char(src[nameEnd])) {
+      ++nameEnd;
+    }
+    const size_t open = src.find('{', nameEnd);
+    if (open == std::string::npos) {
+      break;
+    }
+    int depth = 0;
+    size_t end = open;
+    for (; end < src.size(); ++end) {
+      if (src[end] == '{') {
+        ++depth;
+      } else if (src[end] == '}' && --depth == 0) {
+        break;
+      }
+    }
+    if (end >= src.size()) {
+      return src; // unbalanced: leave it alone
+    }
+    ++end;
+    if (end < src.size() && src[end] == '\n') {
+      ++end;
+    }
+    // Entry points carry @vertex/@fragment on the line before.
+    const size_t prevLine = src.rfind('\n', pos >= 2 ? pos - 2 : 0);
+    const std::string_view before{src.data() + (prevLine == std::string::npos ? 0 : prevLine + 1),
+                                  pos - (prevLine == std::string::npos ? 0 : prevLine + 1)};
+    fns.push_back({src.substr(pos + 3, nameEnd - pos - 3), pos, end, before.starts_with("@")});
+    pos = end;
+  }
+  if (fns.empty()) {
+    return src;
+  }
+  const auto calls = [&](const Fn& from, const std::string& name) {
+    const std::string_view body{src.data() + from.begin, from.end - from.begin};
+    for (size_t at = body.find(name); at != std::string_view::npos; at = body.find(name, at + 1)) {
+      const size_t after = at + name.size();
+      if ((at == 0 || !is_ident_char(body[at - 1])) && after < body.size() && body[after] == '(') {
+        return true;
+      }
+    }
+    return false;
+  };
+  std::vector<bool> used(fns.size());
+  std::vector<size_t> work;
+  for (size_t i = 0; i < fns.size(); ++i) {
+    if (fns[i].entry) {
+      used[i] = true;
+      work.push_back(i);
+    }
+  }
+  while (!work.empty()) {
+    const auto& from = fns[work.back()];
+    work.pop_back();
+    for (size_t i = 0; i < fns.size(); ++i) {
+      if (!used[i] && calls(from, fns[i].name)) {
+        used[i] = true;
+        work.push_back(i);
+      }
+    }
+  }
+  std::string out;
+  out.reserve(src.size());
+  size_t copied = 0;
+  for (size_t i = 0; i < fns.size(); ++i) {
+    if (!used[i]) {
+      out.append(src, copied, fns[i].begin - copied);
+      copied = fns[i].end;
+    }
+  }
+  out.append(src, copied, std::string::npos);
+  return out;
+}
 } // namespace
 
 std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
@@ -2087,6 +2181,7 @@ fn fs_main(in: VertexOutput) -> {10} {{{6}{5}{11}
                   "var<immediate> imm: Immediate;"
 #endif
                   );
+  shaderSource = strip_unused_functions(shaderSource);
   if (dstAlphaMode == DstAlphaMode::DualSource) {
     shaderSource.insert(0, "enable dual_source_blending;\n");
   }
