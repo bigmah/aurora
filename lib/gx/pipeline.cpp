@@ -50,9 +50,10 @@ void pipeline_passes(const PipelineConfig& config, const gfx::RenderTargetLayout
 wgpu::RenderPipeline build_pass(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                 const PipelineOptions& options, const char* passName, AsyncPipelineCallback onAsync) {
   const auto hash = xxh3_hash(layout.key, xxh3_hash(config, static_cast<HashType>(gfx::ShaderType::GX)));
-  const auto shader = build_shader(config.shaderConfig, layout, options.dstAlphaMode);
+  HashType shaderKey = 0;
+  const auto shader = build_shader(config.shaderConfig, layout, options.dstAlphaMode, &shaderKey);
   const auto label = fmt::format("GX Pipeline {:x} {}", hash, passName);
-  return build_pipeline(config, layout, options, {}, shader, label.c_str(), std::move(onAsync));
+  return build_pipeline(config, layout, options, {}, shader, label.c_str(), std::move(onAsync), shaderKey);
 }
 } // namespace
 

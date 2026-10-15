@@ -574,11 +574,16 @@ using AsyncPipelineCallback = std::function<void(wgpu::RenderPipeline)>;
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
                                     wgpu::ShaderModule shader, const char* label,
-                                    AsyncPipelineCallback onAsync = {}) noexcept;
+                                    AsyncPipelineCallback onAsync = {}, HashType shaderKey = 0) noexcept;
 std::string build_shader_source(const ShaderConfig& config, DstAlphaMode dstAlphaMode,
                                 uint32_t normalAttachment = UINT32_MAX) noexcept;
+// Shader configs that generate the same source share one module; sourceKey (when given) gets the
+// source's hash, which build_pipeline's shaderKey uses to share whole pipelines the same way.
 wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
-                                DstAlphaMode dstAlphaMode) noexcept;
+                                DstAlphaMode dstAlphaMode, HashType* sourceKey = nullptr) noexcept;
+// Drops the shared modules and pipelines (pipeline cache shutdown).
+void clear_shared_pipelines() noexcept;
+void clear_shared_shaders() noexcept;
 GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept;
 
 u8 comp_type_size(GXAttr attr, GXCompType type) noexcept;

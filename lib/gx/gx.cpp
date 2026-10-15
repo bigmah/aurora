@@ -16,6 +16,9 @@
 #include <tracy/Tracy.hpp>
 
 #include <atomic>
+#include <array>
+#include <cstring>
+#include <optional>
 #include <bit>
 #include <cfloat>
 #include <cmath>
@@ -356,10 +359,34 @@ void set_render_scissor(const gfx::ClipRect& scissor) noexcept {
 
 const gfx::TextureBind& get_texture(GXTexMapID id) noexcept { return g_gxState.textures[static_cast<size_t>(id)]; }
 
+namespace {
+// Pipelines with the same shader source and fixed-function state, whatever config made them.
+// WebKit compiles every pipeline in the way of presenting a frame, so each one shared is a hitch less.
+struct SharedPipelineKey {
+  HashType shader;
+  uint32_t depthFormat, depthWrite, depthCompare;
+  int32_t depthBias;
+  float depthBiasSlopeScale, depthBiasClamp;
+  uint32_t colorOp, colorSrc, colorDst, alphaOp, alphaSrc, alphaDst;
+  uint32_t topology, cullMode, frontFace, sampleCount, targetCount;
+  std::array<uint32_t, gfx::MaxColorAttachments> targetFormats, writeMasks;
+};
+std::mutex g_sharedPipelineMutex;
+absl::flat_hash_map<HashType, wgpu::RenderPipeline> g_sharedPipelines;
+} // namespace
+
+void clear_shared_pipelines() noexcept {
+  {
+    std::lock_guard lock{g_sharedPipelineMutex};
+    g_sharedPipelines.clear();
+  }
+  clear_shared_shaders();
+}
+
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::RenderTargetLayout& layout,
                                     const PipelineOptions& options, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
                                     wgpu::ShaderModule shader, const char* label,
-                                    AsyncPipelineCallback onAsync) noexcept {
+                                    AsyncPipelineCallback onAsync, HashType shaderKey) noexcept {
   ZoneScoped;
   const float depthBias = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetBits);
   const float depthBiasSlopeScale = (UseReversedZ ? -1.0f : 1.0f) * std::bit_cast<float>(config.polygonOffsetScaleBits);
@@ -407,19 +434,69 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, const gfx::Ren
       .multisample = wgpu::MultisampleState{.count = layout.sampleCount},
       .fragment = &fragmentState,
   };
+  std::optional<HashType> sharedKey;
+  if (shaderKey != 0 && vtxBuffers.empty()) {
+    SharedPipelineKey key;
+    std::memset(&key, 0, sizeof(key));
+    key.shader = shaderKey;
+    if (descriptor.depthStencil != nullptr) {
+      key.depthFormat = static_cast<uint32_t>(depthStencil.format);
+      key.depthWrite = depthStencil.depthWriteEnabled ? 1 : 0;
+      key.depthCompare = static_cast<uint32_t>(depthStencil.depthCompare);
+      key.depthBias = depthStencil.depthBias;
+      key.depthBiasSlopeScale = depthStencil.depthBiasSlopeScale;
+      key.depthBiasClamp = depthStencil.depthBiasClamp;
+    }
+    key.colorOp = static_cast<uint32_t>(blendState.color.operation);
+    key.colorSrc = static_cast<uint32_t>(blendState.color.srcFactor);
+    key.colorDst = static_cast<uint32_t>(blendState.color.dstFactor);
+    key.alphaOp = static_cast<uint32_t>(blendState.alpha.operation);
+    key.alphaSrc = static_cast<uint32_t>(blendState.alpha.srcFactor);
+    key.alphaDst = static_cast<uint32_t>(blendState.alpha.dstFactor);
+    key.topology = static_cast<uint32_t>(descriptor.primitive.topology);
+    key.cullMode = static_cast<uint32_t>(descriptor.primitive.cullMode);
+    key.frontFace = static_cast<uint32_t>(descriptor.primitive.frontFace);
+    key.sampleCount = layout.sampleCount;
+    key.targetCount = layout.colorAttachmentCount;
+    for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
+      key.targetFormats[i] = static_cast<uint32_t>(colorTargets[i].format);
+      key.writeMasks[i] = static_cast<uint32_t>(colorTargets[i].writeMask);
+    }
+    sharedKey = xxh3_hash_s(&key, sizeof(key));
+    std::unique_lock lock{g_sharedPipelineMutex};
+    if (const auto it = g_sharedPipelines.find(*sharedKey); it != g_sharedPipelines.end()) {
+      auto pipeline = it->second;
+      lock.unlock();
+      if (onAsync) {
+        onAsync(std::move(pipeline));
+        return {};
+      }
+      return pipeline;
+    }
+  }
+  const auto share = [sharedKey](const wgpu::RenderPipeline& pipeline) {
+    if (sharedKey && pipeline) {
+      std::lock_guard lock{g_sharedPipelineMutex};
+      g_sharedPipelines.try_emplace(*sharedKey, pipeline);
+    }
+  };
   if (onAsync) {
     g_device.CreateRenderPipelineAsync(
         &descriptor, wgpu::CallbackMode::AllowSpontaneous,
-        [cb = std::move(onAsync)](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
-                                  wgpu::StringView message) {
+        [cb = std::move(onAsync), share](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
+                                         wgpu::StringView message) {
           if (status != wgpu::CreatePipelineAsyncStatus::Success) {
             Log.error("Background pipeline compile failed ({}): {}", underlying(status), message);
+            pipeline = {};
           }
-          cb(status == wgpu::CreatePipelineAsyncStatus::Success ? std::move(pipeline) : wgpu::RenderPipeline{});
+          share(pipeline);
+          cb(std::move(pipeline));
         });
     return {};
   }
-  return g_device.CreateRenderPipeline(&descriptor);
+  auto pipeline = g_device.CreateRenderPipeline(&descriptor);
+  share(pipeline);
+  return pipeline;
 }
 
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept {

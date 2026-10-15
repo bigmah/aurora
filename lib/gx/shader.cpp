@@ -10,6 +10,7 @@
 
 #include <dolphin/gx/GXEnum.h>
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/flat_hash_set.h>
 #include <mutex>
 #include <string_view>
@@ -2192,8 +2193,18 @@ fn fs_main(in: VertexOutput) -> {10} {{{6}{5}{11}
   return shaderSource;
 }
 
+namespace {
+std::mutex g_sharedShaderMutex;
+absl::flat_hash_map<HashType, wgpu::ShaderModule> g_sharedShaders;
+} // namespace
+
+void clear_shared_shaders() noexcept {
+  std::lock_guard lock{g_sharedShaderMutex};
+  g_sharedShaders.clear();
+}
+
 wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTargetLayout& layout,
-                                DstAlphaMode dstAlphaMode) noexcept {
+                                DstAlphaMode dstAlphaMode, HashType* sourceKey) noexcept {
   ZoneScoped;
   uint32_t normalAttachment = UINT32_MAX;
   for (uint32_t i = 0; i < layout.colorAttachmentCount; ++i) {
@@ -2202,6 +2213,17 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTar
     }
   }
   const auto shaderSource = build_shader_source(config, dstAlphaMode, normalAttachment);
+  // About a third of the configs a game uses differ only in fields that don't change the source.
+  const auto key = xxh3_hash_s(shaderSource.data(), shaderSource.size());
+  if (sourceKey != nullptr) {
+    *sourceKey = key;
+  }
+  {
+    std::lock_guard lock{g_sharedShaderMutex};
+    if (const auto it = g_sharedShaders.find(key); it != g_sharedShaders.end()) {
+      return it->second;
+    }
+  }
   const auto hash = xxh3_hash(dstAlphaMode, xxh3_hash(normalAttachment, xxh3_hash(config)));
   wgpu::ShaderSourceWGSL wgslDescriptor{};
   wgslDescriptor.code = shaderSource.c_str();
@@ -2210,6 +2232,9 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config, const gfx::RenderTar
       .nextInChain = &wgslDescriptor,
       .label = label.c_str(),
   };
-  return webgpu::g_device.CreateShaderModule(&shaderDescriptor);
+  auto module = webgpu::g_device.CreateShaderModule(&shaderDescriptor);
+  std::lock_guard lock{g_sharedShaderMutex};
+  g_sharedShaders.try_emplace(key, module);
+  return module;
 }
 } // namespace aurora::gx

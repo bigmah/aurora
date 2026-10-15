@@ -4,6 +4,7 @@
 #ifdef AURORA_ENABLE_GX
 #include "gfx/resources.hpp"
 #include "gfx/frame.hpp"
+#include "gfx/pipeline_cache.hpp"
 #include "gfx/recording.hpp"
 #include "gfx/render_worker.hpp"
 #include "gx/command_processor.hpp"
@@ -486,4 +487,13 @@ void aurora_set_resampler(AuroraSampler sampler) {
 #endif
 }
 void aurora_set_timescale(float scale) { aurora::time::set_scale(scale); }
+size_t aurora_set_pipeline_prewarm(int perFrame) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::set_pipeline_prewarm(perFrame);
+  return aurora::gfx::background_pipelines_left();
+#else
+  (void)perFrame;
+  return 0;
+#endif
+}
 float aurora_get_timescale() { return aurora::time::scale(); }

@@ -112,6 +112,10 @@ constexpr uint32_t WebPipelineFileMagic = 0x43505541; // "AUPC"
 constexpr size_t MaxAsyncPipelinesInFlight = 16;
 constexpr size_t MaxAsyncPipelinesPerFrame = 8;
 static absl::flat_hash_set<PipelineRef> g_asyncInFlight;
+// Background compiles the app allows per frame (aurora_set_pipeline_prewarm), or -1 for the default
+// pacing. AURORA_PIPELINE_PREWARM=app starts it at 0: the lists load, but nothing compiles in the
+// background until the app opens a window where hitches don't show (a loading screen, a cutscene).
+static std::atomic_int g_prewarmPerFrame = -1;
 #endif
 
 static sqlite3* g_pipelineCacheDb = nullptr;
@@ -1212,6 +1216,10 @@ static size_t web_load_pipeline_files() {
   if (const char* env = getenv("AURORA_PIPELINE_PREWARM"); env != nullptr && env[0] == '0') {
     Log.info("Pipeline prewarm off (AURORA_PIPELINE_PREWARM=0)");
     return 0;
+  } else if (env != nullptr && std::strcmp(env, "app") == 0) {
+    Log.info("Pipeline prewarm waits for the app (AURORA_PIPELINE_PREWARM=app)");
+    int expected = -1;
+    g_prewarmPerFrame.compare_exchange_strong(expected, 0);
   }
   size_t count = web_load_pipeline_file(web_pipeline_path(g_config.resourcesPath, InitialWebPipelineFileName));
   count += web_load_pipeline_file(web_pipeline_path(g_config.userPath, WebPipelineFileName));
@@ -1227,14 +1235,16 @@ static void pump_async_pipelines() {
     const char* env = getenv("AURORA_PIPELINES_PER_FRAME");
     return env != nullptr && atoi(env) > 0 ? static_cast<size_t>(atoi(env)) : MaxAsyncPipelinesPerFrame;
   }();
+  const int appPerFrame = g_prewarmPerFrame.load();
+  const size_t perFrame = appPerFrame >= 0 ? static_cast<size_t>(appPerFrame) : s_perFrame;
   static double s_lastPump = 0;
   const double now = emscripten_get_now();
   const bool late = s_lastPump != 0 && now - s_lastPump > 25.0;
   s_lastPump = now;
-  if (late && s_perFrame < MaxAsyncPipelinesPerFrame) {
+  if (late && perFrame < MaxAsyncPipelinesPerFrame) {
     return;
   }
-  for (size_t started = 0; started < s_perFrame;) {
+  for (size_t started = 0; started < perFrame;) {
     PendingPipeline pending;
     bool alreadyBuilt = false;
     {
@@ -1431,6 +1441,7 @@ void shutdown_pipeline_cache() {
   g_pipelinesPerFrame = 0;
   g_gpuCachePrunePending = false;
   g_pipelines.clear();
+  gx::clear_shared_pipelines();
   g_knownPipelines.clear();
   g_pipelineLayoutKey.reset();
   g_pipelineQueue.clear();
@@ -1442,6 +1453,19 @@ void shutdown_pipeline_cache() {
 
   queuedPipelines = 0;
   createdPipelines = 0;
+}
+
+void set_pipeline_prewarm(int perFrame) {
+#ifdef __EMSCRIPTEN__
+  g_prewarmPerFrame = perFrame < 0 ? -1 : std::min(perFrame, static_cast<int>(MaxAsyncPipelinesPerFrame));
+#else
+  (void)perFrame; // the pipeline thread compiles in the background without holding up frames
+#endif
+}
+
+size_t background_pipelines_left() {
+  std::lock_guard guard{g_pipelineMutex};
+  return g_backgroundPipelineQueue.size();
 }
 
 void begin_pipeline_frame() {
