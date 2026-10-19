@@ -134,6 +134,8 @@ void aurora_end_frame();
 
 void aurora_set_log_level(AuroraLogLevel level);
 void aurora_set_pause_on_focus_lost(bool value);
+/** Keep running while the window is hidden (a browser tab in the background), e.g. an online game. */
+void aurora_set_run_hidden(bool value);
 void aurora_set_background_input(bool value);
 void aurora_set_resampler(AuroraSampler sampler);
 /** Browser: how many known pipelines may compile in the background per frame (at most 8); -1 restores

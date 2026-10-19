@@ -1060,7 +1060,17 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     deviceDescriptor.SetUncapturedErrorCallback(
         [](const wgpu::Device& device, wgpu::ErrorType type, wgpu::StringView message) {
           if (g_initialized) {
+#ifdef __EMSCRIPTEN__
+            // In a browser one rejected call (a phone's lower limits, a
+            // transient out-of-memory) costs a draw or a frame; aborting would
+            // end the game (and an online match) on that device alone.
+            static std::atomic_int s_reported = 0;
+            if (s_reported++ < 20) {
+              Log.error("WebGPU error {}: {}", underlying(type), message);
+            }
+#else
             FATAL("WebGPU error {}: {}", underlying(type), message);
+#endif
           } else {
             Log.warn("WebGPU error {}: {}", underlying(type), message);
           }

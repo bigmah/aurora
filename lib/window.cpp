@@ -58,6 +58,7 @@ std::atomic_bool g_surfaceReady = true;
 #endif
 bool g_lastPaused = false;
 bool g_gotFocus = false;
+bool g_runHidden = false;
 
 void retain_event_strings(SDL_Event& event) {
   switch (event.type) {
@@ -513,12 +514,14 @@ SDL_Window* get_sdl_window() { return g_window; }
 
 SDL_Renderer* get_sdl_renderer() { return g_renderer; }
 
+void set_run_hidden(bool value) noexcept { g_runHidden = value; }
+
 bool is_paused() noexcept {
   if (!is_presentable()) {
     return true;
   }
   const auto flags = SDL_GetWindowFlags(g_window);
-  if ((flags & SDL_WINDOW_HIDDEN) != 0u) {
+  if ((flags & SDL_WINDOW_HIDDEN) != 0u && !g_runHidden) {
     return true;
   }
   // Wait until the window has received focus before respecting pauseOnFocusLost

@@ -37,6 +37,7 @@ void show_window();
 AuroraWindowSize get_window_size();
 const AuroraEvent* poll_events();
 SDL_Window* get_sdl_window();
+void set_run_hidden(bool value) noexcept;
 SDL_Renderer* get_sdl_renderer();
 bool is_paused() noexcept;
 bool is_presentable() noexcept;

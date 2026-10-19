@@ -475,6 +475,7 @@ const AuroraBackend* aurora_get_available_backends(size_t* count) {
 }
 void aurora_set_log_level(AuroraLogLevel level) { aurora::g_config.logLevel = level; }
 void aurora_set_pause_on_focus_lost(bool value) { aurora::g_config.pauseOnFocusLost = value; }
+void aurora_set_run_hidden(bool value) { aurora::window::set_run_hidden(value); }
 void aurora_set_background_input(bool value) {
   aurora::g_config.allowJoystickBackgroundEvents = value;
   aurora::window::set_background_input(value);
