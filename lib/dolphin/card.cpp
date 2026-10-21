@@ -21,7 +21,8 @@ std::array<std::filesystem::path, 2> cardPaths;
 constexpr uint16_t CARD_SECTOR_SIZE = 8192;
 
 const char* get_card_region(const char* gameName) {
-  if (gameName == nullptr || std::strlen(gameName) != 4) {
+  // g_gameName is the disc header's 4 characters, with no terminator.
+  if (gameName == nullptr || strnlen(gameName, 4) != 4) {
     return nullptr;
   }
   switch (gameName[3]) {
