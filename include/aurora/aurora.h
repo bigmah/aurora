@@ -142,6 +142,10 @@ void aurora_set_resampler(AuroraSampler sampler);
  * the default pacing. With AURORA_PIPELINE_PREWARM=app it starts at 0, so the app opens windows where
  * a hitch doesn't show. Returns the number waiting or still compiling. Elsewhere a thread compiles them anyway. */
 size_t aurora_set_pipeline_prewarm(int perFrame);
+/** Draws are read and dropped while set: the game runs without rendering (catching up a replay). */
+void aurora_set_skip_draws(bool value);
+/** Browser: how many times the GPU device was lost and replaced (0 until it happens). */
+uint32_t aurora_get_device_generation();
 /** Sets the clock timescale. Default 1.0f. 0.0f is paused. Range 0.0f-16.0f. */
 void aurora_set_timescale(float scale);
 

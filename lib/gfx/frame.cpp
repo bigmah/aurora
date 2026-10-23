@@ -249,7 +249,12 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
   g_stagingBuffers[slot].MapAsync(
       wgpu::MapMode::Write, 0, StagingBufferSize, wgpu::CallbackMode::AllowSpontaneous,
       [slot, releaseSlotOnCompletion](wgpu::MapAsyncStatus status, wgpu::StringView message) {
-        if (status == wgpu::MapAsyncStatus::CallbackCancelled || status == wgpu::MapAsyncStatus::Aborted) {
+        // A lost device fails every mapping (the browser: webgpu::recover_device replaces it).
+        if (status == wgpu::MapAsyncStatus::CallbackCancelled || status == wgpu::MapAsyncStatus::Aborted
+#ifdef __EMSCRIPTEN__
+            || status != wgpu::MapAsyncStatus::Success
+#endif
+        ) {
           Log.warn("Buffer mapping {}: {}", magic_enum::enum_name(status), message);
           g_mappingStates[slot].store(BufferMapState::Unmapped, std::memory_order_release);
           if (releaseSlotOnCompletion) {

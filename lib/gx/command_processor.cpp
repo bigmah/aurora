@@ -152,6 +152,8 @@ struct DrawCache {
   GXVtxFmt lastDrawFmt = GX_MAX_VTXFMT;
 };
 DrawCache sDrawCache;
+// aurora_set_skip_draws: draws are read and dropped (the GX state they'd use still changes).
+bool sSkipDraws = false;
 
 FogRangeLutKey fog_range_lut_key() noexcept {
   const auto& state = g_gxState.fog;
@@ -564,6 +566,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& 
   u32 totalVtxBytes = vtxCount * vtxSize;
   if (totalVtxBytes > reader.remaining())
     UNLIKELY { handle_draw_overrun(totalVtxBytes, reader); }
+  if (sSkipDraws)
+    UNLIKELY {
+      reader.take(totalVtxBytes);
+      return;
+    }
 
   const bool cleanState = g_gxState.dirty == 0 && fmt == sDrawCache.lastDrawFmt && sDrawCache.lineMode == 0 &&
                           prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS;
@@ -800,7 +807,7 @@ void handle_aurora(ByteReader& reader) noexcept {
     const size_t idxBytes = static_cast<size_t>(indexCount) * sizeof(u16);
     // Index data is always host-endian; push it to the GPU buffer as-is
     const auto indexData = reader.take(idxBytes);
-    const gfx::Range idxRange = gfx::push_indices(indexData.data(), indexData.size(), 4);
+    const gfx::Range idxRange = sSkipDraws ? gfx::Range{} : gfx::push_indices(indexData.data(), indexData.size(), 4);
     u32 vtxSize;
     if (g_gxState.lastVtxFmt == fmt) {
       vtxSize = g_gxState.lastVtxSize;
@@ -809,6 +816,9 @@ void handle_aurora(ByteReader& reader) noexcept {
     }
     const u32 totalVtxBytes = vtxCount * vtxSize;
     const auto vertexData = reader.take(totalVtxBytes);
+    if (sSkipDraws) {
+      return;
+    }
     const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
     if (indexCount != 0) {
       push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount);
@@ -827,6 +837,11 @@ void handle_aurora(ByteReader& reader) noexcept {
     Log.error("Unknown Aurora subcommand: {:04X}", subCmd);
   }
 }
+
+void set_skip_draws(bool skip) noexcept { sSkipDraws = skip; }
+
+// A new GPU device (webgpu::recover_device): nothing cached from the old one survives.
+void reset_draw_cache() noexcept { sDrawCache = {}; }
 
 void clear_draw_cache() noexcept {
   sDrawCache.bindGeneration = 0;

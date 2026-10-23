@@ -247,6 +247,9 @@ bool begin_frame() noexcept {
     if (window::is_paused()) {
       return false;
     }
+    if (webgpu::device_lost() && !webgpu::recover_device()) {
+      return false;
+    }
     if (!g_surface) {
       webgpu::refresh_surface(true);
       if (!g_surface) {
@@ -498,3 +501,17 @@ size_t aurora_set_pipeline_prewarm(int perFrame) {
 #endif
 }
 float aurora_get_timescale() { return aurora::time::scale(); }
+void aurora_set_skip_draws(bool value) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gx::fifo::set_skip_draws(value);
+#else
+  (void)value;
+#endif
+}
+uint32_t aurora_get_device_generation() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::webgpu::device_generation();
+#else
+  return 0;
+#endif
+}

@@ -14,5 +14,7 @@ struct ProcessResult {
 // Process GX FIFO commands until the next draw done event or end of buffer
 ProcessResult process(const uint8_t* data, uint32_t size) noexcept;
 void clear_draw_cache() noexcept;
+void reset_draw_cache() noexcept;
+void set_skip_draws(bool skip) noexcept;
 
 } // namespace aurora::gx::fifo

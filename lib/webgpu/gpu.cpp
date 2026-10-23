@@ -17,10 +17,12 @@
 #include <magic_enum.hpp>
 #include <webgpu/webgpu_cpp.h>
 
+#include "../gx/command_processor.hpp"
 #include "../gx/gx.hpp"
 #include "../gfx/frame.hpp"
 #include "../gfx/recording.hpp"
 #include "../gfx/render_worker.hpp"
+#include "../imgui.hpp"
 #include "../internal.hpp"
 #include "../window.hpp"
 #include "gpu_prof.hpp"
@@ -75,6 +77,12 @@ bool g_astcTexturesSupported = false;
 bool g_textureComponentSwizzleSupported = false;
 static std::atomic_bool g_initialized = false;
 static std::atomic_bool g_vsyncEnabled = true;
+// Browser: the GPU device was lost while running (a phone's page in the background, a GPU
+// process restart); the next frame makes a new one (recover_device).
+static std::atomic_bool g_deviceLost = false;
+static uint32_t g_deviceGeneration = 0;
+static wgpu::BackendType g_requestedBackend = wgpu::BackendType::Undefined;
+static bool g_allowCpu = false;
 
 namespace {
 
@@ -794,6 +802,8 @@ static bool create_surface() {
   return true;
 }
 
+static bool create_device(wgpu::BackendType backend, bool allowCpu);
+
 bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   if (!g_instance) {
     Log.info("Creating WebGPU instance");
@@ -841,6 +851,14 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
   if (!create_surface()) {
     return false;
   }
+  g_requestedBackend = backend;
+  g_allowCpu = allowCpu;
+  return create_device(backend, allowCpu);
+}
+
+// The adapter, the device and what's made from it (surface configuration, copy pipelines, frame
+// buffers): at startup, and again after the device is lost.
+static bool create_device(wgpu::BackendType backend, bool allowCpu) {
   {
     const wgpu::RequestAdapterOptions options{
 #ifdef __EMSCRIPTEN__
@@ -1078,11 +1096,23 @@ bool initialize(AuroraBackend auroraBackend, bool allowCpu) {
     deviceDescriptor.SetDeviceLostCallback(
         wgpu::CallbackMode::AllowSpontaneous,
         [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+#ifdef __EMSCRIPTEN__
+          // The browser takes the GPU away now and then (phones in the background): the game's
+          // state is all in memory, so the next frame carries on with a new device. A device
+          // already replaced (or released at shutdown) is no news.
+          if (g_initialized && device.Get() == g_device.Get() && reason != wgpu::DeviceLostReason::CallbackCancelled) {
+            Log.error("Device lost ({}): {}; making a new one", underlying(reason), message);
+            g_deviceLost = true;
+          } else {
+            Log.warn("Device lost ({}): {}", underlying(reason), message);
+          }
+#else
           if (g_initialized) {
             FATAL("Device lost: {}", message);
           } else {
             Log.warn("Device lost: {}", message);
           }
+#endif
         });
     bool requestDeviceCallbackCompleted = false;
     const auto future =
@@ -1172,6 +1202,76 @@ void shutdown() {
   g_adapter = {};
   g_instance = {};
   cache_shutdown();
+}
+
+bool device_lost() noexcept { return g_deviceLost.load(std::memory_order_acquire); }
+
+uint32_t device_generation() noexcept { return g_deviceGeneration; }
+
+// Between frames, after the device was lost: everything made from the old device goes (frame
+// buffers, pipelines, textures, bind groups: gfx::shutdown), a new adapter and device come, and
+// gfx starts again. Nothing waits on the old device (its work never finishes). The GX state the
+// game set (registers, loaded texture objects) stays: textures upload again from game memory as
+// they're drawn, and pipelines build again (the app may prewarm the known ones).
+bool recover_device() {
+#ifdef __EMSCRIPTEN__
+  // A browser may refuse a new device for a while (a page in the background): ask once a second.
+  static double s_lastTry = -1e9;
+  const double now = emscripten_get_now();
+  if (now - s_lastTry < 1000.0) {
+    return false;
+  }
+  s_lastTry = now;
+#endif
+  g_deviceLost = false;
+  // The old device's objects go once, even when the new device takes more than one try.
+  static bool s_released = false;
+  static decltype(gx::g_gxState.loadedTextures) loadedTextures;
+  static decltype(gx::g_gxState.loadedTluts) loadedTluts;
+  if (!s_released) {
+    Log.warn("Recovering from a lost device");
+    g_initialized = false;
+    loadedTextures = gx::g_gxState.loadedTextures;
+    loadedTluts = gx::g_gxState.loadedTluts;
+    imgui::shutdown_gpu();
+    gfx::shutdown();
+    gpu_prof::shutdown();
+    g_CopyBindGroupLayout = {};
+    g_CopyPipeline = {};
+    g_CopyPremultipliedAlphaPipeline = {};
+    g_CopyBindGroup = {};
+    g_ResampleBindGroupLayout = {};
+    g_ResamplePipeline = {};
+    g_ResampleUniformBuffer = {};
+    g_resampledFrameBuffer = {};
+    g_frameBuffer = {};
+    g_frameBufferResolved = {};
+    g_depthBuffer = {};
+    g_normalBuffer = {};
+    g_graphicsConfig.normalBuffer = false;
+    g_queue = {};
+    g_device = {};
+    g_adapter = {};
+    g_adapterInfo = {};
+    s_released = true;
+  }
+  if ((!g_surface && !create_surface()) || !create_device(g_requestedBackend, g_allowCpu)) {
+    Log.error("No new device after a device loss");
+    g_deviceLost = true; // try again a second later
+    return false;
+  }
+  s_released = false;
+  gfx::initialize();
+  gx::g_gxState.loadedTextures = loadedTextures;
+  gx::g_gxState.loadedTluts = loadedTluts;
+  for (auto& bind : gx::g_gxState.textures) {
+    bind = {};
+  }
+  gx::fifo::reset_draw_cache();
+  imgui::initialize_gpu();
+  ++g_deviceGeneration;
+  Log.warn("New device ready (generation {})", g_deviceGeneration);
+  return true;
 }
 
 void release_surface() noexcept {

@@ -152,6 +152,23 @@ void initialize() noexcept {
   });
 }
 
+// A new GPU device (webgpu::recover_device): the WebGPU renderer's objects go with the old one.
+void shutdown_gpu() noexcept {
+  if (!g_useSdlRenderer && ImGui::GetCurrentContext() != nullptr) {
+    ImGui_ImplWGPU_Shutdown();
+    g_wgpuTextures.clear();
+  }
+}
+
+void initialize_gpu() noexcept {
+  if (!g_useSdlRenderer && ImGui::GetCurrentContext() != nullptr) {
+    ImGui_ImplWGPU_InitInfo info;
+    info.Device = webgpu::g_device.Get();
+    info.RenderTargetFormat = static_cast<WGPUTextureFormat>(webgpu::g_graphicsConfig.surfaceConfiguration.format);
+    ImGui_ImplWGPU_Init(&info);
+  }
+}
+
 void shutdown() noexcept {
   ZoneScoped;
   input::unregister_layer(g_inputLayer);

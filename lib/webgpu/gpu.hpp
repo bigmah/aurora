@@ -64,6 +64,10 @@ extern bool g_dualSourceBlendingSupported;
 
 bool initialize(AuroraBackend backend, bool allowCpu);
 void shutdown();
+// Browser: the device was lost (the next frame recovers it); recover_device makes a new one.
+bool device_lost() noexcept;
+bool recover_device();
+uint32_t device_generation() noexcept;
 void release_surface() noexcept;
 bool refresh_surface(bool recreate = true);
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t nativeWidth, uint32_t nativeHeight, bool force = false);
