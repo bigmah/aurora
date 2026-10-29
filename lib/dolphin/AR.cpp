@@ -17,8 +17,20 @@ static BOOL AR_init_flag;
 // and using a simple bump allocator (matching ARAlloc behavior on real hardware).
 static u8* sAramBuffer = nullptr;
 
+// ARAM is there from power-on: games DMA to it before ARInit (SMB2 loads its
+// fonts into ARAM at boot and calls ARInit later, when sound starts).
+static void ensureAram() {
+  if (!sAramBuffer && aurora::g_config.mem2Size != 0) {
+    sAramBuffer = (u8*)calloc(1, aurora::g_config.mem2Size);
+    if (!sAramBuffer) {
+      Log.fatal("Failed to allocate ARAM!");
+    }
+  }
+}
+
 // Convert an ARAM "address" (offset) to a real host pointer
 static u8* aramToHost(u32 aramAddr) {
+  ensureAram();
   if (!sAramBuffer || aramAddr >= aurora::g_config.mem2Size) {
     return nullptr;
   }
@@ -62,12 +74,8 @@ u32 ARInit(u32* stack_index_addr, u32 num_entries) {
     return ARAM_STACK_START;
   }
 
-  sAramBuffer = (u8*)calloc(1, aurora::g_config.mem2Size);
-  if (sAramBuffer) {
-    Log.debug("Initialized 0x{:X} bytes of ARAM!", aurora::g_config.mem2Size);
-  } else {
-    Log.fatal("Failed to allocate ARAM!");
-  }
+  ensureAram();
+  Log.debug("Initialized 0x{:X} bytes of ARAM!", aurora::g_config.mem2Size);
 
   AR_StackPointer = ARAM_STACK_START;
   AR_FreeBlocks = num_entries;
@@ -113,5 +121,6 @@ void ARQInit() {
 }
 
 void* ARGetStorageAddress() {
+  ensureAram();
   return sAramBuffer;
 }

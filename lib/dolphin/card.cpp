@@ -17,6 +17,13 @@ namespace {
 aurora::Module Log("aurora::card");
 std::array<std::unique_ptr<aurora::card::ICard>, 2> CardChannels = {{}};
 std::array<std::filesystem::path, 2> cardPaths;
+// Each channel's last async result (CARDGetResultCode).
+s32 LastResult[2] = {CARD_RESULT_READY, CARD_RESULT_READY};
+void set_last_result(const s32 chan, const s32 res) {
+  if (chan >= 0 && chan < 2) {
+    LastResult[chan] = res;
+  }
+}
 
 constexpr uint16_t CARD_SECTOR_SIZE = 8192;
 
@@ -386,6 +393,7 @@ s32 CARDCheckAsync(const s32 chan, const CARDCallback callback) {
 
   const auto& card = GET_CARD(chan);
   const auto res = static_cast<s32>(card->getError());
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -410,6 +418,7 @@ s32 CARDCheckExAsync(const s32 chan, s32* xferBytes [[maybe_unused]], const CARD
   }
   const auto& card = GET_CARD(chan);
   const auto res = static_cast<s32>(card->getError());
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -441,6 +450,7 @@ s32 CARDCreateAsync(const s32 chan, const char* fileName, const u32 size, CARDFi
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto res = CARDCreate(chan, fileName, size, fileInfo);
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -471,6 +481,7 @@ s32 CARDDeleteAsync(const s32 chan, const char* fileName, const CARDCallback cal
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto res = CARDDelete(chan, fileName);
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -500,6 +511,7 @@ s32 CARDFastDeleteAsync(const s32 chan, const s32 fileNo, const CARDCallback cal
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto res = CARDFastDelete(chan, fileNo);
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -541,6 +553,7 @@ s32 CARDFormatAsync(const s32 chan, const CARDCallback callback) {
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto res = CARDFormat(chan);
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -596,6 +609,11 @@ s32 CARDGetResultCode(const s32 chan) {
   if (!CARD_READY(chan))
     return CARD_RESULT_NOCARD;
 
+  // The result of the channel's last operation, as on the SDK: games issue an
+  // async call and poll this for its outcome (e.g. NOFILE from CARDRenameAsync).
+  if (LastResult[chan] != CARD_RESULT_READY) {
+    return LastResult[chan];
+  }
   const auto& card = GET_CARD(chan);
   return static_cast<s32>(card->getError());
 }
@@ -674,6 +692,7 @@ s32 CARDMountAsync(const s32 chan, void* workArea [[maybe_unused]], const CARDCa
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto& card = GET_CARD(chan);
+  set_last_result(chan, card ? static_cast<s32>(card->getError()) : CARD_RESULT_NOCARD);
   if (card && attachCallback) {
     attachCallback(chan, static_cast<s32>(card->getError()));
   }
@@ -744,6 +763,7 @@ s32 CARDRenameAsync(const s32 chan, const char* oldName, const char* newName, co
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto res = CARDRename(chan, oldName, newName);
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -757,6 +777,7 @@ s32 CARDSetAttributesAsync(const s32 chan, s32 fileNo [[maybe_unused]], u8 attr 
   }
   // TODO:
   CARD_STUB
+  set_last_result(chan, CARD_RESULT_READY);
   return CARD_RESULT_READY;
 }
 
@@ -803,6 +824,7 @@ s32 CARDSetStatusAsync(const s32 chan, const s32 fileNo, const CARDStat* stat, c
     return CARD_RESULT_FATAL_ERROR;
   }
   const auto res = CARDSetStatus(chan, fileNo, stat);
+  set_last_result(chan, res);
   if (callback) {
     callback(chan, res);
   }
@@ -869,6 +891,7 @@ s32 CARDRead(const CARDFileInfo* fileInfo, void* addr, s32 length, const s32 off
 s32 CARDReadAsync(const CARDFileInfo* fileInfo, void* addr, const s32 length, const s32 offset,
                   const CARDCallback callback) {
   const auto res = CARDRead(fileInfo, addr, length, offset);
+  set_last_result(fileInfo->chan, res);
   if (callback) {
     callback(fileInfo->chan, res);
   }
@@ -900,6 +923,7 @@ s32 CARDWrite(const CARDFileInfo* fileInfo, const void* addr, const s32 length, 
 s32 CARDWriteAsync(const CARDFileInfo* fileInfo, const void* addr, const s32 length, const s32 offset,
                    const CARDCallback callback) {
   const auto res = CARDWrite(fileInfo, addr, length, offset);
+  set_last_result(fileInfo->chan, res);
   if (callback) {
     callback(fileInfo->chan, res);
   }
