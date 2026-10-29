@@ -716,8 +716,13 @@ s32 CARDProbeEx(const s32 chan, s32* memSize, s32* sectorSize) {
 
   // ReSharper disable once CppUseStructuredBinding
   const aurora::card::ProbeResults probeData = card->probeCardFile(cardPaths[chan]);
-  *memSize = probeData.x4_cardSize;
-  *sectorSize = probeData.x8_sectorSize;
+  // Either may be NULL (the SDK allows it: SMB2 passes NULL for memSize).
+  if (memSize != nullptr) {
+    *memSize = probeData.x4_cardSize;
+  }
+  if (sectorSize != nullptr) {
+    *sectorSize = probeData.x8_sectorSize;
+  }
 
   return static_cast<s32>(probeData.x0_error);
 }
