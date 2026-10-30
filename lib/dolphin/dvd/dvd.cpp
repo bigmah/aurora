@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <string>
 #include <thread>
 #include <utility>
@@ -328,9 +329,30 @@ bool isCommandBlockIdle(const DVDCommandBlock* block) {
   return state != DVD_STATE_BUSY && state != DVD_STATE_WAITING;
 }
 
+// An open file's handle, kept by its command block. Not in the block's
+// userData: the SDK leaves that to the application, and games use it (SMB2's
+// preview textures point it at their own struct).
+std::mutex s_handleLock;
+std::unordered_map<const DVDCommandBlock*, CommandDataBase*> s_handles;
+
+CommandDataBase* fileHandle(const DVDCommandBlock* block) {
+  std::lock_guard lock(s_handleLock);
+  const auto it = s_handles.find(block);
+  return it != s_handles.end() ? it->second : nullptr;
+}
+
+void setFileHandle(const DVDCommandBlock* block, CommandDataBase* handle) {
+  std::lock_guard lock(s_handleLock);
+  if (handle != nullptr) {
+    s_handles[block] = handle;
+  } else {
+    s_handles.erase(block);
+  }
+}
+
 CommandDataBase* getCommandHandle(DVDCommandBlock* block) {
-  if (block != nullptr && block->userData != nullptr) {
-    return static_cast<CommandDataBase*>(block->userData);
+  if (CommandDataBase* handle = fileHandle(block)) {
+    return handle;
   }
   return s_disc;
 }
@@ -973,10 +995,8 @@ int DVDResetRequired(void) { return FALSE; }
 // Disc image offset of an open file's first byte, or -1 (web builds: lets the page fetch a read's
 // bytes before it's issued).
 extern "C" int64_t aurora_dvd_file_disc_offset(const DVDFileInfo* fileInfo) {
-  if (fileInfo == nullptr || fileInfo->cb.userData == nullptr) {
-    return -1;
-  }
-  return static_cast<const CommandDataBase*>(fileInfo->cb.userData)->disc_offset();
+  const CommandDataBase* handle = fileInfo != nullptr ? fileHandle(&fileInfo->cb) : nullptr;
+  return handle != nullptr ? handle->disc_offset() : -1;
 }
 
 s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) {
@@ -1130,7 +1150,8 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
       return FALSE;
     }
 
-    fileInfo->cb.userData = new CommandDataOverlay(handle);
+    delete fileHandle(&fileInfo->cb);
+    setFileHandle(&fileInfo->cb, new CommandDataOverlay(handle));
   } else {
     NodHandle* handle = nullptr;
     NodResult result = nod_partition_open_file(s_partition, entry.origEntryNum, &handle);
@@ -1138,7 +1159,8 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
       return FALSE;
     }
 
-    fileInfo->cb.userData = new CommandDataNod(handle);
+    delete fileHandle(&fileInfo->cb);
+    setFileHandle(&fileInfo->cb, new CommandDataNod(handle));
   }
 
   atomic_store_release(fileInfo->cb.state, DVD_STATE_END);
@@ -1158,10 +1180,8 @@ BOOL DVDClose(DVDFileInfo* fileInfo) {
     return FALSE;
   }
   s_worker.drain_command(&fileInfo->cb);
-  if (fileInfo->cb.userData != nullptr) {
-    delete static_cast<CommandDataBase*>(fileInfo->cb.userData);
-    fileInfo->cb.userData = nullptr;
-  }
+  delete fileHandle(&fileInfo->cb);
+  setFileHandle(&fileInfo->cb, nullptr);
   atomic_store_release(fileInfo->cb.state, DVD_STATE_END);
   return TRUE;
 }
@@ -1340,7 +1360,7 @@ void* DVDGetFSTLocation(void) {
 
 BOOL DVDPrepareStreamAsync(DVDFileInfo* fileInfo, u32 length, u32 offset, DVDCallback callback) {
   ASSERTMSGLINE(0x46C, fileInfo, "DVDPrepareStreamAsync(): NULL file info was specified");
-  if (fileInfo == nullptr || fileInfo->cb.userData == nullptr) {
+  if (fileInfo == nullptr || fileHandle(&fileInfo->cb) == nullptr) {
     return FALSE;
   }
   if (length == 0) {
