@@ -2,6 +2,8 @@
 #include "__gx.h"
 #include "../../gx/fifo.hpp"
 
+extern "C" void GXEnd();
+
 namespace {
 // Track vertex count between GXBegin/GXEnd for mismatch detection
 u16 sBeginNVerts = 0;
@@ -12,7 +14,12 @@ u32 sBeginSizeOffset = 0;
 bool sBeginAuto = false;
 
 void pre_begin() {
-  CHECK(!sInBegin, "GXBegin: called without matching GXEnd");
+  if (sInBegin) {
+    // On the GameCube GXEnd() does nothing, and games (and their decomps,
+    // which match the original code) often leave it out: end the previous
+    // primitive here.
+    GXEnd();
+  }
 
   // Flush dirty state before starting a draw
   if (__gx->dirtyState != 0) {
