@@ -82,9 +82,9 @@ bool arb_mip_check(uint32_t width, uint32_t height, uint32_t mips, ArrayRef<uint
     return false;
   }
 
-  std::array<const uint8_t*, 10> levels{};
-  std::array<uint32_t, 10> widths{};
-  std::array<uint32_t, 10> heights{};
+  std::array<const uint8_t*, 16> levels{};
+  std::array<uint32_t, 16> widths{};
+  std::array<uint32_t, 16> heights{};
   CHECK(mips <= levels.size(), "arb_mip_check: unsupported mip count {}", mips);
 
   size_t offset = 0;
