@@ -97,7 +97,18 @@ struct GXTexObj_ {
   }
   GXTexFilter mag_filter() const noexcept { return get_bits(mode0, 1, 4) != 0 ? GX_LINEAR : GX_NEAR; }
   GXBool has_mips() const noexcept { return (flags & 1u) != 0 ? GX_TRUE : GX_FALSE; }
-  u32 mip_count() const noexcept { return has_mips() ? std::max<u32>(static_cast<u32>(max_lod()) + 1, 1u) : 1; }
+  // Hardware clamps the LOD to the levels a texture has, and games rely on it: a game may
+  // set maxLod 10 on a 256x128 texture. Never ask for more levels than the size allows.
+  u32 mip_count() const noexcept {
+    if (!has_mips()) {
+      return 1;
+    }
+    u32 sizeLevels = 1;
+    for (u32 size = std::max(width(), height()); size > 1; size >>= 1) {
+      ++sizeLevels;
+    }
+    return std::min(std::max<u32>(static_cast<u32>(max_lod()) + 1, 1), sizeLevels);
+  }
   GXBool do_edge_lod() const noexcept { return get_bits(mode0, 1, 8) == 0 ? GX_TRUE : GX_FALSE; }
   float lod_bias() const noexcept { return static_cast<float>(static_cast<int8_t>(get_bits(mode0, 8, 9))) / 32.0f; }
   GXAnisotropy max_aniso() const noexcept { return static_cast<GXAnisotropy>(get_bits(mode0, 2, 19)); }
